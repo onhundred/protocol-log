@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { voiceIssues } from "../lib/protocol.mjs";
+import P from "../protocol.json" with { type: "json" };
 import { DOCUMENTS, MAX_GRADE, checkFile, checkText, readDebt, report } from "../scripts/voicecheck.mjs";
+
+test("voice: the playbook is checked like every published document", async () => {
+  assert.ok(DOCUMENTS.includes("docs/PLAYBOOK.md"));
+  const out = report([await checkFile("docs/PLAYBOOK.md", {})]);
+  assert.equal(out, "", out);
+});
+
+test("voice: agent text that guilts or hypes the reader is flagged, with the fix", () => {
+  assert.ok(P.voice.guilt.includes("you haven't") && P.voice.guilt.includes("falling behind") && P.voice.guilt.includes("don't break"));
+  assert.ok(P.voice.hype.includes("crushing it"));
+  assert.match(voiceIssues("You haven't paid the rent", "en").join(" "), /guilts the reader/);
+  assert.match(voiceIssues("You haven’t paid the rent", "en").join(" "), /guilts the reader/, "curly apostrophes count too");
+  assert.match(voiceIssues("We're falling behind on bills", "en").join(" "), /guilts the reader/);
+  assert.match(voiceIssues("Crushing it with the rent", "en").join(" "), /hype/);
+  assert.deepEqual(voiceIssues("The rent was paid on time", "en"), []);
+});
 
 test("voice: every document passes, apart from the text listed in scripts/voice-debt.json", async () => {
   const debt = await readDebt();

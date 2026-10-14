@@ -22,6 +22,17 @@
     }
   });
 
+  // A card's copy button also tells the log the link was copied, so agents stop offering that card.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-card-copied]");
+    if (!btn || btn.dataset.sent) return;
+    btn.dataset.sent = "1";
+    const body = new FormData();
+    body.set("op", "card_copied");
+    body.set("id", btn.dataset.cardCopied);
+    fetch("/owner/action", { method: "POST", body, headers: { Accept: "application/json" } }).catch(() => delete btn.dataset.sent);
+  });
+
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-dismiss]");
     if (!btn) return;

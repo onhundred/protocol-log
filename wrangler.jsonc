@@ -11,14 +11,16 @@
   "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "onhundred-log-backups" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "durable_objects": { "bindings": [{ "name": "WRITER", "class_name": "Writer" }] },
+  // Browser Rendering takes the share card screenshots. Without it, shared links use /og.png.
+  "browser": { "binding": "BROWSER" },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Writer"] }],
-  // Nightly backup to R2 at 03:17 UTC.
+  // Nightly backup to R2 at 03:17 UTC, and a retry of any card screenshot that failed.
   "triggers": { "crons": ["17 3 * * *"] },
   "vars": {
     "PUBLISH": "false",
     "LANGUAGES": "en"
   },
-  // Optional, added later in Settings, Variables and Secrets: OWNER_NAME, PUBLIC_URL (variables)
-  // and PUBLISH_HOOK_URL (secret).
+  // Optional, added later in Settings, Variables and Secrets: OWNER_NAME, PUBLIC_URL, CARD_IMAGES
+  // ("off" stops card screenshots) (variables) and PUBLISH_HOOK_URL (secret).
   "observability": { "enabled": true }
 }

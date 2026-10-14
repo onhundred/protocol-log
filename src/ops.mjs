@@ -1,8 +1,12 @@
 // Every write the log accepts, as pure functions over a cloned state.
 // The WRITER Durable Object runs them one at a time, validates the result and saves the diff.
 import {
+  CHALLENGE_LEVELS,
   LEVELS,
+  ODDS,
+  QUESTION_KINDS,
   areaExists,
+  checkInDue,
   compareVersions,
   estimateCanStart,
   isActive,
@@ -112,9 +116,17 @@ const touch = (loop, ctx) => {
 function setText(target, fields, ctx) {
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue;
+    if (!ctx.directText) refuseTone(k, v);
     if (ctx.directText || target.proposed) target[k] = v;
     else target.pending = { ...(target.pending || {}), [k]: v };
   }
+}
+
+// An agent's text is checked the moment it's written, so the agent hears which rule it broke and rewrites it.
+function refuseTone(field, value) {
+  if (!value || typeof value !== "object") return;
+  const issues = Object.entries(value).flatMap(([lang, s]) => voiceIssues(s, lang).map((i) => `${field} (${lang}) ${i}`));
+  if (issues.length) fail(`${issues.join(" ")} Rewrite it following onhundred://docs/voice.`);
 }
 
 function newLoop(state, spec, ctx, extra = {}) {
@@ -123,12 +135,21 @@ function newLoop(state, spec, ctx, extra = {}) {
   if (!areaExists(areaCode, state.meta)) fail(`${areaCode} is not an area in protocol section 2.4.`);
   const code = nextLoopCode(state, areaCode);
   const scope = text(spec.scope, "scope", { required: false });
+  const name = text(spec.name, "name");
+  const doneWhen = text(spec.doneWhen, "doneWhen");
+  if (!ctx.directText) {
+    if (!String(spec.evidence || "").trim())
+      fail("evidence is required: say where this loop showed up, like a calendar block, an email thread or what the person told you. It stays private.");
+    refuseTone("name", name);
+    refuseTone("doneWhen", doneWhen);
+    refuseTone("scope", scope);
+  }
   const loop = {
     code,
     level: "still",
     proposed: true,
-    name: text(spec.name, "name"),
-    doneWhen: text(spec.doneWhen, "doneWhen"),
+    name,
+    doneWhen,
     ...(scope ? { scope } : {}),
     ...(spec.estimate ? { estimate: estimate(spec.estimate) } : {}),
     ...(spec.triage ? { triage: triage(spec.triage, false) } : {}),
@@ -146,6 +167,16 @@ function newLoop(state, spec, ctx, extra = {}) {
 const owner = (ctx) => {
   if (ctx.access !== "owner") fail("only the owner can do this. Connect with owner access or ask the owner.");
 };
+
+// Inside the check-in window, the first summary, round end or proving on an owner connection marks the check-in.
+// Limited connections and a paused log never mark one.
+function markCheckIn(state, ctx, by) {
+  if (ctx.access !== "owner") return null;
+  const n = checkInDue(state.meta, ctx.now);
+  if (n == null) return null;
+  state.meta.checkIns = [...(state.meta.checkIns || []), { cycle: n, at: ctx.now, by }];
+  return n;
+}
 
 // Approving swaps a broken pending text for a broken live one, which the violation count can't see.
 function refuseBrokenText(state, target, fields) {
@@ -322,7 +353,13 @@ export const ops = {
     };
     exp.stages.push(t);
     for (const c of exp.loops) touch(findLoop(state, c), ctx);
-    return { target: exp.code, result: { experiment: exp.code, stage, try: attempt, level } };
+    const period = P.limits.cycleWeeks * 7;
+    const days = (Date.parse(t.deadline) - Date.parse(t.start)) / 86400000;
+    const warnings =
+      stage === 1 && days > period
+        ? [`Round 1 runs ${days} days, longer than 1 check-in period (${period} days). A short first round gives a result sooner. Ask the person whether a shorter round works.`]
+        : [];
+    return { target: exp.code, result: { experiment: exp.code, stage, try: attempt, level, ...(warnings.length ? { warnings } : {}) } };
   },
 
   close_stage_try(state, { experiment, outcome, closedAt, reason, actualCost, notes }, ctx) {
@@ -336,7 +373,8 @@ export const ops = {
     if (actualCost) t.actualCost = String(actualCost);
     if (notes) t.notes = String(notes);
     for (const c of exp.loops) touch(findLoop(state, c), ctx);
-    return { target: exp.code, result: { experiment, stage: t.stage, try: t.try, outcome } };
+    const checkIn = markCheckIn(state, ctx, "close_stage_try");
+    return { target: exp.code, result: { experiment, stage: t.stage, try: t.try, outcome, ...(checkIn != null ? { checkIn } : {}) } };
   },
 
   record_hold(state, { experiment, result, at }, ctx) {
@@ -354,7 +392,16 @@ export const ops = {
       }
       touch(loop, ctx);
     }
-    return { target: exp.code, result: { experiment, hold: result, moved, level: t.level } };
+    const checkIn = markCheckIn(state, ctx, "record_hold");
+    return { target: exp.code, result: { experiment, hold: result, moved, level: t.level, ...(checkIn != null ? { checkIn } : {}) } };
+  },
+
+  // get_check_in calls this inside the check-in window. Round ends and provings mark it on their own.
+  mark_check_in(state, _args, ctx) {
+    owner(ctx);
+    const n = markCheckIn(state, ctx, "get_check_in");
+    if (n == null) fail("no check-in is due. The window runs from day 13 of a period to day 3 of the next, once per period, and never while paused.");
+    return { target: "meta", result: { checkIn: n } };
   },
 
   record_drop(state, { code, cause, at, note }, ctx) {
@@ -464,6 +511,9 @@ export const ops = {
   // Owner: experiments
   register_experiment(state, args, ctx) {
     owner(ctx);
+    const odds = Number(args.odds);
+    if (args.odds == null || !Number.isInteger(odds) || odds < ODDS.min || odds > ODDS.max)
+      fail(`odds is required: ask the person what chance, from ${ODDS.min} to ${ODDS.max}, they give the bet. Under ${ODDS.min} or over ${ODDS.max} isn't a real bet.`);
     if (!Array.isArray(args.loops) || !args.loops.length) fail("loops lists the loops this experiment moves.");
     const loops = args.loops.map((c) => findLoop(state, c));
     const levels = new Set(loops.map((l) => l.level));
@@ -472,6 +522,7 @@ export const ops = {
     const exp = {
       code: nextExpCode(state),
       slot: args.slot,
+      odds,
       ...(args.funReason ? { funReason: String(args.funReason) } : {}),
       loops: args.loops,
       startLevel: [...levels][0],
@@ -534,9 +585,25 @@ export const ops = {
         if (typeof v !== "object" || !v) fail("grid is { cols: {R, P, C}, seeds: {R, P, C} }.");
         return v;
       },
+      challenge: (v) => {
+        if (!CHALLENGE_LEVELS.includes(v)) fail(`challenge is ${CHALLENGE_LEVELS.join(", ")}.`);
+        return v;
+      },
+      questions: (v) => {
+        if (typeof v !== "object" || !v || Array.isArray(v)) fail(`questions is { ${QUESTION_KINDS.map((k) => `${k}: true or false`).join(", ")} }.`);
+        const out = { ...(state.meta.questions || {}) };
+        for (const [k, on] of Object.entries(v)) {
+          if (!QUESTION_KINDS.includes(k)) fail(`questions.${k} is not a kind of question. Kinds: ${QUESTION_KINDS.join(", ")}.`);
+          if (typeof on !== "boolean") fail(`questions.${k} is true or false.`);
+          out[k] = on;
+        }
+        return out;
+      },
+      cards: Boolean,
+      pausedUntil: (v) => date(v, "pausedUntil"),
     };
     const changed = [];
-    const clearable = new Set(["about", "links"]);
+    const clearable = new Set(["about", "links", "pausedUntil"]);
     for (const [k, v] of Object.entries(args)) {
       if (!(k in allowed)) fail(`${k} is not a setting. Settings: ${Object.keys(allowed).join(", ")}.`);
       if (v == null && clearable.has(k)) delete state.meta[k];
@@ -587,6 +654,7 @@ export const OWNER_OPS = new Set([
   "conclude_experiment",
   "set_meta",
   "adopt_protocol",
+  "mark_check_in",
 ]);
 
 export function pendingItems(state) {

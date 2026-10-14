@@ -1,8 +1,9 @@
 // D1 access: load the whole log (it's small) and save a diff plus its event in one batch.
-import { protocol as P, upgradeLevels, versionChange } from "../lib/protocol.mjs";
+import { QUESTION_KINDS, protocol as P, upgradeLevels, versionChange } from "../lib/protocol.mjs";
 import { SCHEMA_VERSION, STATEMENTS } from "./schema.mjs";
 
 const DAY = 86400000;
+const QUESTION_DEFAULTS = Object.fromEntries(QUESTION_KINDS.map((k) => [k, true]));
 let schemaReady = false;
 
 export async function ensureSchema(db) {
@@ -65,7 +66,12 @@ export function effectiveMeta(meta, env, today, loops = []) {
     day: 0,
     stage: "map",
     grid: { cols: { R: 4, P: 4, C: 4 }, seeds: { R: 7, P: 13, C: 29 } },
+    challenge: "normal",
+    cards: true,
+    pausedUntil: null,
+    checkIns: [],
     ...meta,
+    questions: { ...QUESTION_DEFAULTS, ...(meta.questions || {}) },
   };
   if (m.cycleOneStart) {
     const days = Math.floor((Date.parse(today) - Date.parse(m.cycleOneStart)) / DAY);
@@ -215,13 +221,107 @@ export async function getPublicEvents(db, tools, { limit = 500 } = {}) {
 
 export async function snapshot(env) {
   const state = await readState(env);
-  const events = (await env.DB.prepare("SELECT * FROM events ORDER BY id").all()).results;
+  const [events, cards, nudges] = await env.DB.batch([
+    env.DB.prepare("SELECT * FROM events ORDER BY id"),
+    env.DB.prepare("SELECT * FROM cards ORDER BY created_at"),
+    env.DB.prepare("SELECT * FROM nudge_activity ORDER BY id"),
+  ]);
   return {
     exportedAt: new Date().toISOString(),
     protocolVersion: state.meta.protocolVersion,
     meta: state.meta,
     loops: state.loops,
     experiments: state.experiments,
-    events: events.map((e) => ({ ...e, args: e.args && JSON.parse(e.args), before: e.before && JSON.parse(e.before), after: e.after && JSON.parse(e.after) })),
+    events: events.results.map((e) => ({ ...e, args: e.args && JSON.parse(e.args), before: e.before && JSON.parse(e.before), after: e.after && JSON.parse(e.after) })),
+    cards: cards.results.map(cardRow),
+    nudgeActivity: nudges.results,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Share cards and nudge activity: written straight to D1, outside the log's history, so undo never touches them.
+
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const CARD_JSON = new Set(["facts", "waiting", "images", "remakes"]);
+
+export function cardId() {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => BASE62[b % 62]).join("");
+}
+
+const parse = (v, fallback) => (v == null ? fallback : JSON.parse(v));
+function cardRow(r) {
+  if (!r) return null;
+  return { ...r, facts: parse(r.facts, {}), waiting: parse(r.waiting, null), images: parse(r.images, {}), remakes: parse(r.remakes, null) };
+}
+
+export async function saveCard(db, card) {
+  const cols = ["id", "kind", "moment", "page", "target", "facts", "headline", "event_id", "waiting", "created_at", "ready_at", "images"];
+  const value = (k) => (CARD_JSON.has(k) ? (card[k] == null ? null : JSON.stringify(card[k])) : (card[k] ?? null));
+  await db
+    .prepare(`INSERT INTO cards (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`)
+    .bind(...cols.map(value))
+    .run();
+}
+
+export async function updateCard(db, id, fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const value = (k) => (CARD_JSON.has(k) && fields[k] != null ? JSON.stringify(fields[k]) : fields[k]);
+  await db
+    .prepare(`UPDATE cards SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`)
+    .bind(...keys.map(value), id)
+    .run();
+}
+
+export async function getCard(db, id) {
+  if (!/^[0-9A-Za-z]{8}$/.test(String(id || ""))) return null;
+  return cardRow(await db.prepare("SELECT * FROM cards WHERE id = ?").bind(id).first());
+}
+
+export async function listCards(db, { limit = 50, eventId, waiting = false, queued = false } = {}) {
+  const where = [];
+  const binds = [];
+  if (eventId != null) {
+    where.push("event_id = ?");
+    binds.push(Number(eventId));
+  }
+  if (waiting) where.push("waiting IS NOT NULL AND revoked_at IS NULL");
+  if (queued) where.push("revoked_at IS NULL AND images LIKE '%queued%'");
+  const sql = `SELECT * FROM cards${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`;
+  return (await db.prepare(sql).bind(...binds, Math.min(Math.max(Number(limit) || 50, 1), 200)).all()).results.map(cardRow);
+}
+
+export async function countCardView(db, id) {
+  await db.prepare("UPDATE cards SET views = views + 1 WHERE id = ?").bind(id).run();
+}
+
+export async function nudgeActivity(db, since) {
+  return (await db.prepare("SELECT nudge_id, kind, about, event, answer, at FROM nudge_activity WHERE at >= ? ORDER BY id").bind(since).all()).results;
+}
+
+// Hands out a nudge only if no other call showed one within the cooldown, in 1 statement, so 2 calls at once get 1.
+export async function recordShown(db, nudge, { at, actor, coolSince }) {
+  const r = await db
+    .prepare(
+      `INSERT INTO nudge_activity (nudge_id, kind, about, event, at, actor)
+       SELECT ?, ?, ?, 'shown', ?, ? WHERE NOT EXISTS (SELECT 1 FROM nudge_activity WHERE event = 'shown' AND at > ?)`
+    )
+    .bind(nudge.id, nudge.kind, nudge.about ?? null, at, actor ?? null, coolSince)
+    .run();
+  return r.meta.changes > 0;
+}
+
+export async function noticeGiven(db, kind) {
+  return Boolean(await db.prepare("SELECT 1 AS one FROM nudge_activity WHERE event = 'noticed' AND kind = ? LIMIT 1").bind(kind).first());
+}
+
+export async function lastShown(db, nudgeId) {
+  return db.prepare("SELECT nudge_id, kind, about, at FROM nudge_activity WHERE event = 'shown' AND nudge_id = ? ORDER BY id DESC LIMIT 1").bind(nudgeId).first();
+}
+
+export async function recordNudge(db, { nudge_id, kind, about = null, event, answer = null, at, actor = null }) {
+  await db
+    .prepare("INSERT INTO nudge_activity (nudge_id, kind, about, event, answer, at, actor) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(nudge_id, kind, about, event, answer, at, actor)
+    .run();
 }

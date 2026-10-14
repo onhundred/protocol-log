@@ -18,6 +18,7 @@ import {
   parseCode,
   pendingRuleBreaks,
   pickText,
+  progressNote,
   protocol as P,
   publicActivity,
   publicView,
@@ -72,9 +73,11 @@ export function html(body, { status = 200, headers = {}, cache = "no-store", for
 const CREDIT = P.attribution;
 
 // signedIn without owner: the owner previewing the visitor's page. The body is the visitor's; the nav still knows who's here.
-function layout({ title, ownerName, version = P.version, owner = false, signedIn = owner, body, current = "", origin = "", description: about = "" }) {
+// ogImage, ogTitle and ogDescription replace the link preview: a shared card swaps in its own image and headline.
+function layout({ title, ownerName, version = P.version, owner = false, signedIn = owner, body, current = "", origin = "", description: about = "", ogImage = "", ogTitle = "", ogDescription = "" }) {
   const link = (href, label) => `<a href="${href}"${current === href ? ' aria-current="page"' : ""}>${label}</a>`;
   const description = about || `${ownerName ? `${ownerName}'s log` : "A log"} that follows the ${CREDIT.text}.`;
+  const image = ogImage || `${origin}/og.png`;
   const signOut = `<form method="post" action="/logout"><button type="submit" class="linkish">SIGN OUT</button></form>`;
   const nav = owner
     ? `<nav class="nav">${link("/", "LOG")}${link("/connections", "CONNECTIONS")}<a href="/export" data-export-open>EXPORT</a>${signOut}</nav>`
@@ -92,12 +95,12 @@ function layout({ title, ownerName, version = P.version, owner = false, signedIn
 <meta name="description" content="${esc(description)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Onhundred Protocol">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:image" content="${esc(origin)}/og.png">
+<meta property="og:title" content="${esc(ogTitle || title)}">
+<meta property="og:description" content="${esc(ogDescription || description)}">
+<meta property="og:image" content="${esc(image)}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Onhundred">
+<meta property="og:image:alt" content="${esc(ogTitle || "Onhundred")}">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.ico" sizes="48x48">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -114,7 +117,7 @@ ${nav}
 ${body}
 </main>
 ${owner ? exportDialog() : ""}
-<footer class="foot"><a class="foot-mark" href="${esc(CREDIT.url)}" rel="noopener" aria-label="Onhundred"><img src="/on100.svg" alt="" width="32" height="32"></a><span>Follows the <a href="${esc(CREDIT.url)}" rel="noopener">${esc(CREDIT.text)}</a>. v${esc(P.version)}. Your data lives in your Cloudflare account.</span></footer>
+<footer class="foot"><a class="foot-mark" href="${esc(CREDIT.url)}" rel="noopener" aria-label="Onhundred"><img src="/on100.svg" alt="" width="32" height="32"></a><span>Follows the <a href="${esc(CREDIT.url)}" rel="noopener">${esc(CREDIT.text)}</a> and <a href="https://4geeks.com" rel="noopener">4Geeks.com</a>. v${esc(P.version)}.${owner ? " Your data lives in your Cloudflare account." : ""}</span></footer>
 </body>
 </html>`;
 }
@@ -438,8 +441,9 @@ function readout(view, meta, owner, headed = false) {
   const current = changeIsCurrent(change, new Date().toISOString().slice(0, 10));
   rows.push(row("PROTOCOL", `v${esc(meta.protocolVersion)}`, current ? esc(changeNote(change)) : ""));
   const mini = owner ? drawGrid(view, meta, { compact: true }) : null;
+  const progress = progressNote(view);
   return `<section class="readout">
-<div class="readout-main"><${headed ? "p" : "h1"} class="figure"><span class="pct" data-assisted-weight="${assistedWeight(m.version || P.version)}">${m.delegatedPoints}</span><span class="cap">OF ${P.limits.loops}<br>HANDED OFF</span></${headed ? "p" : "h1"}>${owner ? `<a class="btn small" href="/?view=public" target="_blank" rel="noopener" aria-label="Check your public dashboard (opens in a new tab)">CHECK YOUR PUBLIC DASHBOARD${NEW_TAB_ICON}</a>` : ""}</div>
+<div class="readout-main"><${headed ? "p" : "h1"} class="figure"><span class="pct" data-assisted-weight="${assistedWeight(m.version || P.version)}">${m.delegatedPoints}</span><span class="cap">OF ${P.limits.loops}<br>HANDED OFF</span></${headed ? "p" : "h1"}>${progress ? `<p class="figure-note">${esc(progress)}</p>` : ""}${owner ? `<a class="btn small" href="/?view=public" target="_blank" rel="noopener" aria-label="Check your public dashboard (opens in a new tab)">CHECK YOUR PUBLIC DASHBOARD${NEW_TAB_ICON}</a>` : ""}</div>
 <dl class="status">${rows.join("")}</dl>
 ${mini ? `<a class="grid mini" href="#activity" role="button" aria-expanded="false" aria-controls="activity" data-grid-toggle style="grid-template-columns:${mini.columns}" aria-label="Show the full delegation grid">${mini.html}</a>` : ""}
 </section>`;
@@ -789,6 +793,8 @@ const HISTORY_LABELS = {
   set_meta: "Settings changed",
   adopt_protocol: "Protocol version adopted",
   undo_event: "A change was undone",
+  mark_check_in: "Check-in marked",
+  card_created: "Share card made",
   connect: "AI app connected",
   revoke_connection: "AI app disconnected",
   revoke_api_key: "API key revoked",
@@ -926,7 +932,7 @@ function waitingLine(state) {
   return n ? notice(`${n} ${n === 1 ? "item waits" : "items wait"} for you. <a href="/login?next=/">Sign in</a> to approve ${n === 1 ? "it" : "them"}.`) : "";
 }
 
-export function logPage({ state, owner, viewOnly = false, events = [], publicEvents = [], url, upgrade, configured: isConfigured, hasConnections, published = false, preview = false }) {
+export function logPage({ state, owner, viewOnly = false, events = [], publicEvents = [], url, upgrade, configured: isConfigured, hasConnections, published = false, preview = false, share = null, ready = [] }) {
   const meta = state.meta;
   const lang = meta.languages[0];
   const view = owner ? derive(state) : publicView(state);
@@ -935,9 +941,11 @@ export function logPage({ state, owner, viewOnly = false, events = [], publicEve
   const head = profileHead(meta, view.metrics.delegatedPoints, { owner: acts, connected: hasConnections, published, origin: url?.origin || "" });
   const body = [
     flash(url),
+    share ? shareBanner(share) : "",
     preview ? previewNotice() : "",
     viewOnly ? viewOnlyNotice() : "",
     !isConfigured ? setupNotice() : "",
+    acts && ready.length ? readyPanel(ready) : "",
     acts ? protocolNotice(meta, upgrade) : "",
     acts && !hasConnections ? notice(`Next: <a href="/connect">connect your first AI app</a>.`, "good") : "",
     acts && !published ? privateNotice() : "",
@@ -951,7 +959,7 @@ export function logPage({ state, owner, viewOnly = false, events = [], publicEve
     owner ? eventsSection(events, state.loops) : "",
   ].join("\n");
   const about = pickText(meta.about, lang);
-  return layout({ title, ownerName: meta.ownerName, owner: acts, signedIn: acts || preview, body, current: "/", origin: url?.origin, description: about });
+  return layout({ title, ownerName: meta.ownerName, owner: acts, signedIn: acts || preview, body, current: "/", origin: url?.origin, description: about, ...shareOg(share) });
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,7 +1295,7 @@ const loopPromptDialog = (code, name) => `<dialog class="modal" data-dialog data
 </dialog>`;
 
 // Null when nobody may see a loop with this code: the route answers 404.
-export function loopPage({ state, owner, viewOnly = false, code, events = [], connected = false, url }) {
+export function loopPage({ state, owner, viewOnly = false, code, events = [], connected = false, url, share = null }) {
   const p = parseCode(code);
   if (!p) return null;
   const meta = state.meta;
@@ -1328,7 +1336,7 @@ export function loopPage({ state, owner, viewOnly = false, code, events = [], co
   const status = `<section class="status-block"><div class="status-row">${levelStack(loop, exps)}${experimentsBox(exps)}</div>${next_ ? `<p class="next-line"><span class="label">NEXT</span>${esc(next_)}</p>` : ""}</section>`;
 
   const body = `<div class="loop-page">
-${flash(url)}${viewOnly ? viewOnlyNotice() : ""}${notices.join("")}
+${flash(url)}${share ? shareBanner(share) : ""}${viewOnly ? viewOnlyNotice() : ""}${notices.join("")}
 ${crumbs}
 ${head}
 ${status}
@@ -1338,8 +1346,114 @@ ${costSection(loop, owner)}
 ${experimentsDrawer(code, exps, lang, today)}
 ${actionable && connected ? loopPromptDialog(code, name) : ""}`;
   const title = `${code} ${name} · ${meta.ownerName ? `${meta.ownerName}: ` : ""}Onhundred Protocol log`;
-  return layout({ title, ownerName: meta.ownerName, owner: owner && !viewOnly, body, origin: url?.origin });
+  return layout({ title, ownerName: meta.ownerName, owner: owner && !viewOnly, body, origin: url?.origin, ...shareOg(share) });
 }
+
+// ---------------------------------------------------------------------------
+// Experiment page: public once the log is published, like a loop's page. Private fields never reach it.
+
+// Null when nobody may see an experiment with this code: the route answers 404.
+export function expPage({ state, owner, viewOnly = false, code, url, share = null }) {
+  const meta = state.meta;
+  const lang = meta.languages[0];
+  const view = owner ? derive(state) : publicView(state);
+  const e = view.experiments.find((x) => x.code === code);
+  if (!e) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const q = pickText(e.question, lang) || pickText(e.pending?.question, lang);
+  const bet = pickText(e.hypothesis, lang) || pickText(e.pending?.hypothesis, lang);
+  const loopName = (c) => {
+    const l = view.loops.find((x) => x.code === c);
+    return l?.private ? "Private loop" : pickText(l?.name, lang);
+  };
+  const loops = e.loops
+    .map((c) => `<li class="row"><a class="code" href="/loop/${esc(c)}">${esc(c)}</a><span>${esc(loopName(c))}</span></li>`)
+    .join("");
+  const verdict = e.conclusion ? `<p class="exp-verdict"><span class="label">ENDED ${esc(upDate(e.conclusion.at))}</span>${esc(BET_WORD[e.conclusion.hypothesis] || "")}</p>` : "";
+  const odds = e.odds != null ? `<p class="exp-odds"><span class="label">ODDS</span>${esc(e.odds)} in 100 that the bet holds</p>` : "";
+  const crumbs = `<nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/">LOG</a></li><li>EXPERIMENTS</li><li aria-current="page">${esc(code)}</li></ol></nav>`;
+  const body = `<div class="loop-page exp-page">
+${flash(url)}${share ? shareBanner(share) : ""}${viewOnly ? viewOnlyNotice() : ""}
+${crumbs}
+<section class="loop-head"><div><p class="exp-id">${esc(code)} · ${esc(String(e.slot).toUpperCase())} PICK</p><h1>${esc(q)}</h1>${bet ? `<p class="done"><span class="label">BET</span>${esc(bet)}</p>` : ""}${odds}${verdict}</div></section>
+<section class="block"><h2 class="title">LOOPS</h2><ul class="plain">${loops}</ul></section>
+<section class="block"><h2 class="title">ROUNDS</h2><ul class="exps">${experimentItem(e, lang, today)}</ul></section>
+</div>`;
+  const title = `${code} ${q} · ${meta.ownerName ? `${meta.ownerName}: ` : ""}Onhundred Protocol log`;
+  return layout({ title, ownerName: meta.ownerName, owner: owner && !viewOnly, body, origin: url?.origin, ...shareOg(share) });
+}
+
+// ---------------------------------------------------------------------------
+// Share cards. share: { card, lang, languages, headline, image, urls, images, post, running, owner } from the worker.
+
+const START_URL = "https://onhundred.com";
+const shareOg = (share) => (share ? { ogImage: share.image, ogTitle: share.headline, ogDescription: share.running ? "Guess how it ends." : "Start your 10." } : {});
+
+const postImagesTools = (share) => {
+  if (share.post === "ready")
+    return `<p class="share-downloads"><span class="label">TO POST</span>${share.images.map((i) => `<a class="btn small" href="${esc(i.url)}" download>${esc(i.label)}</a>`).join("")}</p>`;
+  if (share.post === "queued") return `<p class="muted">Images to post are on the way. Reload in a minute.</p>`;
+  if (!share.owner) return "";
+  return `<form method="post" action="/owner/action" class="share-post"><input type="hidden" name="op" value="card_images"><input type="hidden" name="id" value="${esc(share.card.id)}"><input type="hidden" name="next" value="${esc(share.next || "/")}"><button class="btn small" type="submit">GET IMAGES TO POST (SQUARE AND STORY)</button></form>`;
+};
+
+const copyLinks = (share) =>
+  Object.entries(share.urls)
+    .map(([lang, u]) => {
+      const id = `card-url-${share.card.id}-${lang}`;
+      return `<div class="copy"><span class="copy-field"><span class="copy-label">LINK${Object.keys(share.urls).length > 1 ? ` · ${esc(lang.toUpperCase())}` : ""}</span><code id="${esc(id)}">${esc(u)}</code></span><button class="btn" type="button" data-copy="#${esc(id)}" data-card-copied="${esc(share.card.id)}">COPY</button></div>`;
+    })
+    .join("");
+
+// The banner a visitor sees on the page a card links to. The owner also gets the card's tools.
+function shareBanner(share) {
+  const cta = share.running ? "GUESS HOW IT ENDS" : "START YOUR 10";
+  const tools = share.owner ? `<div class="share-tools">${copyLinks(share)}${postImagesTools(share)}</div>` : "";
+  return `<aside class="share-banner" aria-label="Shared card"><p class="share-headline">${esc(share.headline)}</p><a class="btn signal small" href="${START_URL}" rel="noopener">${cta}</a>${tools}</aside>`;
+}
+
+// The owner's log page: cards with a link nobody copied yet, from the last 2 weeks.
+function readyPanel(shares) {
+  const items = shares
+    .map(
+      (s) =>
+        `<li class="share-ready-item"><img src="${esc(s.imagePath)}" alt="" width="300" height="158" loading="lazy"><div><p class="share-headline">${esc(s.headline)}</p>${copyLinks(s)}${postImagesTools(s)}</div></li>`
+    )
+    .join("");
+  return `<section class="block share-ready" aria-labelledby="share-ready-title"><h2 class="title" id="share-ready-title"><mark>YOUR CARD IS READY</mark></h2><p class="muted">Copy a link to share it. The preview shows the card. Only what your public page shows is on it.</p><ul class="plain">${items}</ul></section>`;
+}
+
+// The standalone card page: for links from a private log. It never links to the rest of the log.
+export function cardPage({ meta, share, origin }) {
+  const f = share.card.facts;
+  const lines = cardLines(f, share.lang);
+  const body = `<section class="block share-page">
+<img class="share-image" src="${esc(share.imagePath)}" alt="${esc(share.headline)}" width="1200" height="630">
+<h1>${esc(share.headline)}</h1>
+<ul class="plain share-facts">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+<p><a class="btn signal" href="${START_URL}" rel="noopener">${share.running ? "GUESS HOW IT ENDS" : "START YOUR 10"}</a></p>
+${share.owner ? `<div class="share-tools">${copyLinks(share)}${postImagesTools(share)}</div>` : postImagesTools(share)}
+</section>`;
+  return layout({ title: share.headline, ownerName: meta.ownerName, signedIn: share.owner, body, origin, ...shareOg(share) });
+}
+
+// The plain facts a card shows under its headline, in 1 language.
+function cardLines(f, lang) {
+  const out = [];
+  if (f.loop) out.push(`${f.loop.code} · ${pickText(f.loop.name, lang)} · ${f.loop.levelName?.[lang] || levelName(f.loop.level, lang)}`);
+  if (f.experiment) {
+    const x = f.experiment;
+    out.push(`${x.code} · ${pickText(x.question, lang)}`);
+    if (x.hypothesis) out.push(`Bet: ${pickText(x.hypothesis, lang)}`);
+    if (x.odds != null) out.push(`Odds: ${x.odds} in 100`);
+  }
+  const hours = f.loop?.hours || f.experiment?.loops?.find((l) => l.hours)?.hours;
+  if (hours) out.push(`${hours.perWeek} h a week (${hours.source})`);
+  out.push(`${f.handedOff} loops handed off · ${f.points} of ${f.total} points`);
+  return out;
+}
+
+export { cardRenderPage } from "./card-render.mjs";
 
 export function privatePage({ meta, origin, configured: isConfigured, hasConnections, preview = false }) {
   const body = `${preview ? previewNotice() : ""}${!isConfigured ? setupNotice() : ""}

@@ -1,8 +1,9 @@
 // Entry point: OAuth for chat apps, API keys for API agents, MCP at /mcp, the log page, backups.
 import { AuthorizationError, CimdFetchError, OAuthProvider } from "@cloudflare/workers-oauth-provider";
-import { PROFILE_LINKS, PUBLIC_TOOLS, compareVersions, normalizeLink, parseCode, publicActivity, publicView, protocol as P } from "../lib/protocol.mjs";
+import { PROFILE_LINKS, PUBLIC_TOOLS, cardHeadline, compareVersions, normalizeLink, parseCode, publicActivity, publicView, protocol as P } from "../lib/protocol.mjs";
 import {
   checkPassword,
+  checkRenderToken,
   checkViewPass,
   clearCookie,
   configured,
@@ -20,9 +21,10 @@ import {
   viewCookie,
   viewerFrom,
 } from "./auth.mjs";
+import { POST_SIZES, SIZES, cardKey, cardUrls, imageUrl, postImages, readyCards, requestPostImages } from "./cards.mjs";
 import { handleMcp } from "./mcp.mjs";
-import { connectPage, connectionsPage, consentPage, html, logPage, loginPage, loopPage, messagePage, privatePage } from "./pages.mjs";
-import { getEvents, getPublicEvents, isPublished, logEvent, readState, snapshot } from "./store.mjs";
+import { cardPage, cardRenderPage, connectPage, connectionsPage, consentPage, expPage, html, logPage, loginPage, loopPage, messagePage, privatePage } from "./pages.mjs";
+import { countCardView, getCard, getEvents, getPublicEvents, isPublished, logEvent, readState, snapshot, updateCard } from "./store.mjs";
 import { writer } from "./writer.mjs";
 
 export { Writer } from "./writer.mjs";
@@ -106,8 +108,10 @@ export default {
     return providerFor(originOf(request, env)).fetch(request, env, ctx);
   },
 
+  // Nightly: saves what came due, backs up, and retries card images that failed.
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(writer(env).write({ actor: "system", access: "owner" }).then(() => backup(env)));
+    const w = writer(env);
+    ctx.waitUntil(w.write({ actor: "system", access: "owner" }).then(() => backup(env)).then(() => w.queueShots()));
   },
 };
 
@@ -131,6 +135,68 @@ function viewTarget(url) {
   if (loop && parseCode(loop)) return `/loop/${loop}`;
   const moved = (url.searchParams.get("moved") || "").split(",").filter((c) => parseCode(c));
   return `/${moved.length ? `?moved=${moved.join(",")}` : ""}#activity`;
+}
+
+// ---------------------------------------------------------------------------
+// Share cards
+
+const CARD_PATH = /^\/c\/([0-9A-Za-z]{8})(?:\/(render|og\.png|square\.png|tall\.png))?$/;
+// Link-preview fetchers from chat apps and social sites: they don't count as views.
+const PREVIEW_BOT = /bot|crawl|spider|preview|facebookexternalhit|slack|discord|whatsapp|telegram|twitter|linkedin|embedly|skype|pinterest|vkshare/i;
+const isBot = (request) => PREVIEW_BOT.test(request.headers.get("User-Agent") || "");
+const pickLang = (url, languages) => (languages.includes(url.searchParams.get("lang")) ? url.searchParams.get("lang") : languages[0]);
+const addQuery = (path, key, value) => `${path}${path.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
+
+// Everything a page needs to show a card: headline, preview image, links per language and the images to post.
+function shareView(card, { origin, url, languages, published, owner, next = "/" }) {
+  const lang = pickLang(url, languages);
+  const q = languages.length > 1 ? `?lang=${lang}` : "";
+  return {
+    card,
+    lang,
+    languages,
+    headline: cardHeadline(card.facts, card.headline, lang),
+    image: imageUrl(origin, card, "og", lang, languages),
+    imagePath: `/c/${card.id}/og.png${q}`,
+    urls: cardUrls(origin, card, { published, languages }),
+    post: postImages(card, languages),
+    images: POST_SIZES.map((s) => ({ label: s === "square" ? "SQUARE" : "STORY", url: `/c/${card.id}/${s}.png${q}` })),
+    running: card.page === "exp" && Boolean(card.facts.experiment?.running),
+    owner,
+    next,
+  };
+}
+
+// The card in ?c=, when it's up, ready and made for this page. Otherwise the page looks normal.
+async function shareFor(request, env, url, page, target, ctx) {
+  const id = url.searchParams.get("c");
+  if (!id) return null;
+  const card = await getCard(env.DB, id);
+  if (!card || card.revoked_at || card.waiting || card.page !== page || (card.target || null) !== (target || null)) return null;
+  if (!ctx.owner && !ctx.viewer && !isBot(request)) await countCardView(env.DB, card.id);
+  return shareView(card, { ...ctx, url, next: url.pathname + url.search });
+}
+
+async function cardRoute(request, env, url, [, id, part], { state, origin, owner, viewer, published }) {
+  const meta = state.meta;
+  const languages = meta.languages;
+  const card = await getCard(env.DB, id);
+  if (part?.endsWith(".png")) {
+    const size = part.slice(0, -".png".length);
+    const obj = card && !card.revoked_at ? await env.BACKUPS.get(cardKey(card.id, pickLang(url, languages), size)) : null;
+    if (!obj) return new Response(null, { status: 302, headers: { Location: "/og.png", "Cache-Control": "no-store" } });
+    return new Response(obj.body, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" } });
+  }
+  if (part === "render") {
+    const size = url.searchParams.get("size") || "og";
+    if (!card || !Object.hasOwn(SIZES, size) || !(await checkRenderToken(env, card.id, url.searchParams.get("t"))))
+      return messagePage({ meta, title: "Not allowed", text: "This page only draws card images.", status: 403 });
+    return html(cardRenderPage({ meta, card, size, lang: pickLang(url, languages), dims: SIZES[size] }));
+  }
+  if (!card || card.waiting) return messagePage({ meta, title: "Not found", text: "No card has this link.", status: 404 });
+  if (card.revoked_at) return messagePage({ meta, title: "This card was taken down", text: "The person who shared it took it down.", status: 410 });
+  if (!owner && !viewer && !isBot(request)) await countCardView(env.DB, card.id);
+  return html(cardPage({ meta, origin, share: shareView(card, { origin, url, languages, published, owner, next: url.pathname + url.search }) }));
 }
 
 async function route(request, env) {
@@ -163,6 +229,19 @@ async function route(request, env) {
     });
   }
   const viewer = owner ? null : await viewerFrom(request, env);
+  const shareCtx = { origin, languages: meta.languages, published, owner, viewer: Boolean(viewer) };
+
+  const cardMatch = CARD_PATH.exec(path);
+  if (cardMatch && method === "GET") return cardRoute(request, env, url, cardMatch, { state, origin, owner, viewer: Boolean(viewer), published });
+
+  // A shared link on a private log: visitors get the card's own page, never the log.
+  if (!published && !owner && !viewer && url.searchParams.has("c") && (path === "/" || path.startsWith("/loop/") || path.startsWith("/exp/"))) {
+    const card = await getCard(env.DB, url.searchParams.get("c"));
+    if (card && !card.revoked_at && !card.waiting) {
+      const lang = url.searchParams.get("lang");
+      return redirect(`/c/${card.id}${lang && meta.languages.includes(lang) ? `?lang=${lang}` : ""}`);
+    }
+  }
 
   if (path === "/public.json") {
     if (!published) return Response.json({ error: "This log is private." }, { status: 404 });
@@ -174,38 +253,53 @@ async function route(request, env) {
 
   if (path === "/") {
     const connected = await hasConnections(env.DB);
+    const share = await shareFor(request, env, url, "home", null, shareCtx);
     if (owner && url.searchParams.get("view") === "public") {
       return html(
         published
-          ? logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, preview: true })
+          ? logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, preview: true, share })
           : privatePage({ meta, origin, configured: true, hasConnections: true, preview: true })
       );
     }
     if (owner) {
       const events = await getEvents(env.DB, { limit: 30 });
-      return html(logPage({ state, owner, events, url, upgrade: compareVersions(meta.protocolVersion, P.version) < 0, configured: configured(env), hasConnections: connected, published }));
+      const ready = (await readyCards(env.DB)).map((c) => shareView(c, { ...shareCtx, url, next: "/" }));
+      return html(logPage({ state, owner, events, url, upgrade: compareVersions(meta.protocolVersion, P.version) < 0, configured: configured(env), hasConnections: connected, published, share, ready }));
     }
     if (viewer) {
       const events = await getEvents(env.DB, { limit: 30 });
-      return html(logPage({ state, owner: true, viewOnly: true, events, url, configured: true, hasConnections: connected, published }));
+      return html(logPage({ state, owner: true, viewOnly: true, events, url, configured: true, hasConnections: connected, published, share }));
     }
     if (published)
-      return html(logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true }), { cache: "public, max-age=30" });
+      return html(logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, share }), share ? {} : { cache: "public, max-age=30" });
     return html(privatePage({ meta, origin, configured: configured(env), hasConnections: connected }));
+  }
+
+  // An experiment's page: the same access rule as a loop's page.
+  if (path.startsWith("/exp/") && method === "GET" && (owner || viewer || published)) {
+    const raw = path.slice("/exp/".length);
+    const code = raw.toUpperCase();
+    if (raw !== code) return redirect(`/exp/${code}${url.search}`);
+    const sees = owner || Boolean(viewer);
+    const share = /^EXP-\d+$/.test(code) ? await shareFor(request, env, url, "exp", code, shareCtx) : null;
+    const page = /^EXP-\d+$/.test(code) ? expPage({ state, owner: sees, viewOnly: !owner && sees, code, url, share }) : null;
+    if (!page) return messagePage({ meta, title: "Not found", text: `No experiment has the code ${code}.`, status: 404 });
+    return html(page, sees || share ? {} : { cache: "public, max-age=30" });
   }
 
   // A loop's page: public once the log is published, with private fields and actions for the owner.
   if (path.startsWith("/loop/") && method === "GET" && (owner || viewer || published)) {
     const raw = path.slice("/loop/".length);
     const code = raw.toUpperCase();
-    if (raw !== code) return redirect(`/loop/${code}`);
+    if (raw !== code) return redirect(`/loop/${code}${url.search}`);
     const sees = owner || Boolean(viewer);
     const events = sees
       ? (await getEvents(env.DB, { target: code, limit: 200 })).filter((e) => String(e.target || "").split(",").includes(code))
       : [];
-    const page = loopPage({ state, owner: sees, viewOnly: !owner && sees, code, events, connected: owner && (await hasConnections(env.DB)), url });
+    const share = await shareFor(request, env, url, "loop", code, shareCtx);
+    const page = loopPage({ state, owner: sees, viewOnly: !owner && sees, code, events, connected: owner && (await hasConnections(env.DB)), url, share });
     if (!page) return messagePage({ meta, title: "Not found", text: `No loop has the code ${code}.`, status: 404 });
-    return html(page, sees ? {} : { cache: "public, max-age=30" });
+    return html(page, sees || share ? {} : { cache: "public, max-age=30" });
   }
 
   // Owner only from here.
@@ -298,10 +392,27 @@ async function ownerAction(request, env, meta) {
     return redirect(withQuery("/connections", "done", `${agent.name} is revoked.`));
   }
 
+  // The copy buttons on a card: the first copy means the person has the link, so agents stop offering it.
+  if (op === "card_copied") {
+    const card = await getCard(env.DB, String(form.get("id") || ""));
+    if (card && !card.copied_at) await updateCard(env.DB, card.id, { copied_at: new Date().toISOString() });
+    return Response.json({ ok: Boolean(card) }, { status: card ? 200 : 404 });
+  }
+
+  if (op === "card_images") {
+    const next = safeNext(String(form.get("next") || "/"));
+    const card = await getCard(env.DB, String(form.get("id") || ""));
+    if (!card || card.revoked_at || card.waiting) return redirect(addQuery(next, "error", "This card can't make images now."));
+    await requestPostImages(env, card, meta.languages, new Date().toISOString());
+    const on = await writer(env).queueShots(originOf(request, env));
+    return redirect(addQuery(next, on ? "done" : "error", on ? "Images to post are on the way. Reload in a minute." : "Card images are off on this log (CARD_IMAGES or Browser Rendering)."));
+  }
+
   if (!Object.hasOwn(OWNER_PAGE_OPS, op)) return redirect(withQuery("/", "error", "Unknown action."));
   const args = OWNER_PAGE_OPS[op](form, meta);
-  const r = await writer(env).write({ op, args, actor: OWNER_USER, access: "owner", directText: true });
-  const done = op === "adopt_protocol" && r.ok ? adoptedMessage(r.result) : doneMessage(op, args);
+  const r = await writer(env).write({ op, args, actor: OWNER_USER, access: "owner", directText: true, origin: originOf(request, env) });
+  const cardNote = r.cardsReady?.length || r.moment?.card?.status === "ready" ? " Your card is ready." : "";
+  const done = (op === "adopt_protocol" && r.ok ? adoptedMessage(r.result) : doneMessage(op, args)) + cardNote;
   // app.js asks for JSON to approve a loop or save the header without leaving the page.
   if (request.headers.get("Accept")?.includes("application/json"))
     return Response.json(r.ok ? { ok: true, done } : { ok: false, error: r.error }, { status: r.ok ? 200 : 400 });

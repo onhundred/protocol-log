@@ -28,7 +28,8 @@
       "D1",
       "R2",
       "KV",
-      "Durable Objects"
+      "Durable Objects",
+      "Browser Rendering"
     ],
     "categories": [
       "ai",
@@ -45,7 +46,10 @@
         "description": "Your log: loops, experiments, connections and the full history of changes."
       },
       "BACKUPS": {
-        "description": "A JSON snapshot of the log, written every night."
+        "description": "A JSON snapshot of the log, written every night, and the images of your share cards."
+      },
+      "BROWSER": {
+        "description": "Browser Rendering: takes the pictures of your share cards in the background. Without it, shared links use the default preview."
       },
       "OAUTH_KV": {
         "description": "Sign-in grants for the AI apps you connect."
@@ -62,6 +66,7 @@
     }
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0",
     "@cloudflare/workers-oauth-provider": "^1.2.3"
   },
   "devDependencies": {

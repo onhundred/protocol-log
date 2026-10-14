@@ -13,7 +13,7 @@
   <a href="https://github.com/onhundred/protocol-log/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/onhundred/protocol-log/test.yml?branch=main&style=flat-square&label=tests&labelColor=0A0A09" alt="Tests"></a>
   <a href="https://github.com/onhundred/protocol-log/releases"><img src="https://img.shields.io/github/v/release/onhundred/protocol-log?style=flat-square&label=release&labelColor=0A0A09&color=C6F432" alt="Release"></a>
   <a href="./docs/protocol.md"><img src="https://img.shields.io/badge/protocol-v1.5-C6F432?style=flat-square&labelColor=0A0A09" alt="Protocol v1.5"></a>
-  <a href="#what-your-agent-can-do"><img src="https://img.shields.io/badge/MCP-38%20tools-C6F432?style=flat-square&labelColor=0A0A09" alt="MCP: 38 tools"></a>
+  <a href="#what-your-agent-can-do"><img src="https://img.shields.io/badge/MCP-40%20tools-C6F432?style=flat-square&labelColor=0A0A09" alt="MCP: 40 tools"></a>
   <a href="https://workers.cloudflare.com"><img src="https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-C6F432?style=flat-square&labelColor=0A0A09&logo=cloudflare&logoColor=white" alt="Runs on Cloudflare Workers"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-C6F432?style=flat-square&labelColor=0A0A09" alt="License: Apache 2.0"></a>
 </p>
@@ -37,7 +37,7 @@
 
 <div align="center">
 
-| **100** | **3** | **2 weeks** | **38** | **2 minutes** |
+| **100** | **3** | **2 weeks** | **40** | **2 minutes** |
 | :---: | :---: | :---: | :---: | :---: |
 | loops in your life | loops at a time | between check-ins | MCP tools | to deploy |
 
@@ -83,7 +83,7 @@ Every loop starts as **Still yours** and climbs 3 levels: **Help me**, **Do it, 
   <tr>
     <td width="33%" valign="top">
       <h4>An agent that does the work</h4>
-      38 MCP tools, 4 documents and 3 starter prompts. Claude, ChatGPT, Grok, Cursor and Claude Code build your loops and run your experiments.
+      40 MCP tools, 5 documents and 4 starter prompts. Claude, ChatGPT, Grok, Cursor and Claude Code build your loops and run your experiments.
     </td>
     <td width="33%" valign="top">
       <h4>Rules agents can't break</h4>
@@ -138,8 +138,9 @@ It takes about 2 minutes. Writing your 100 loops takes longer.
 - **A Worker** with your log page and an MCP server at `/mcp`.
 - **A D1 database** with your loops, experiments, connections and the full history of changes. The tables are created on first use.
 - **A Durable Object** that applies changes one at a time, so two agents can never break a rule together.
-- **An R2 bucket** with a JSON snapshot every night.
+- **An R2 bucket** with a JSON snapshot every night and the images of your share cards.
 - **A KV namespace** for the sign-ins of the AI apps you connect.
+- **Browser Rendering**, which takes the pictures of your share cards. Until it's on, links show your log's default picture.
 
 The setup page asks for 2 secrets:
 
@@ -181,12 +182,12 @@ Each app and key is a named agent. Its name appears in the history next to every
 
 ## What your agent can do
 
-Your log is an [MCP](https://modelcontextprotocol.io) server. MCP is the standard way AI apps read from and write to other systems. Your log gives your agent 38 tools, 4 documents and 3 starter prompts.
+Your log is an [MCP](https://modelcontextprotocol.io) server. MCP is the standard way AI apps read from and write to other systems. Your log gives your agent 40 tools, 5 documents and 4 starter prompts.
 
 Apps you sign in to get **owner** access. API keys get **agent** or **owner** access, chosen when you create them. Agent access reads and proposes. Only owner access approves, publishes and changes settings.
 
 <details>
-<summary><b>Read</b>: 10 tools, any connection</summary>
+<summary><b>Read</b>: 11 tools, any connection</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -200,11 +201,12 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 | `list_pending` | Everything waiting for the owner, next to the live version. |
 | `check_rules` | Every protocol check on the current log. |
 | `get_events` | The append-only history of every change. |
+| `get_video_brief` | The facts of a share card or an experiment, for a short video. Never a script. |
 
 </details>
 
 <details>
-<summary><b>Propose and record</b>: 13 tools, any connection, every change checked against the rules</summary>
+<summary><b>Propose and record</b>: 15 tools, any connection, every change checked against the rules</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -221,11 +223,13 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 | `record_hold` | Records whether a passed round kept passing for 3 weeks. |
 | `record_drop` | Moves a loop down after failing days, harm or lost consent. |
 | `add_learned` | Adds the public lesson of an ended round. It waits for approval. |
+| `get_check_in` | Sums up the last 2 weeks. From you, inside the check-in window, it marks the check-in done. |
+| `manage_card` | Lists share cards. Only you can remake a card, take it down or get images to post. |
 
 </details>
 
 <details>
-<summary><b>Owner</b>: 15 tools, owner access only. Your agent confirms with you before the ones that publish or approve.</summary>
+<summary><b>Owner</b>: 14 tools, owner access only. Your agent confirms with you before the ones that publish or approve.</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -237,19 +241,20 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 | `freeze_inventory` | Freezes your list at exactly 100 loops. |
 | `register_experiment` | Writes down an experiment: pick, question, bet, loops and goal. |
 | `conclude_experiment` | Records the bet as right, wrong or not clear. |
-| `set_meta` | Changes settings: your name, why you run this, your links, languages, publishing, check-in dates and the grid. |
+| `set_meta` | Changes settings: your name, why you run this, your links, languages, publishing, check-in dates and the grid. It also sets challenges, questions, share cards and pauses. |
 | `adopt_protocol` | Moves your log to the protocol version in this code. |
 | `undo_event` | Restores the values from before an event, as a new event. |
 | `override` | Runs 1 change past the checks, for emergencies, and records it. |
-| `list_connections` | Lists API keys and signed-in apps. |
-| `create_api_key` | Creates an API key. It is shown once. |
-| `revoke_api_key` | Revokes an API key at once. |
+| `respond_nudge` | Records your answer to a challenge or a question: done, not now, pause or stop that kind. |
+| `manage_connections` | Lists API keys and signed-in apps, creates a key (shown once) or revokes one at once. |
 
 </details>
 
-**Documents** your agent reads: the protocol, `LOOPS.md` (how to write a loop), `VOICE.md` (how to write public text) and `protocol.json` (the numbers the rules use).
+**Documents** your agent reads: the protocol, `LOOPS.md` (how to write a loop), `VOICE.md` (how to write public text) and `protocol.json` (the numbers the rules use). `PLAYBOOK.md` says when to challenge you, ask you and congratulate you.
 
-**Starter prompts:** "Help me build my 100 loops", "Which loops should I pick for my 3 experiments?" and "Run my check-in". Apps that support MCP prompts show them as shortcuts.
+**Starter prompts:** "Help me build my 100 loops", "Which loops should I pick?", "Run my check-in" and "Help me film this moment". Apps that support MCP prompts show them as shortcuts.
+
+**Share cards.** A big moment, like a round that passed or a bet that went wrong, gets a card. Your agent gives you its link to share. Its preview is a picture of the card. The link opens your loop, your experiment or your log. If your log is private, it opens the card alone. Ask your agent for square and tall images to post. Turn cards off with `set_meta`.
 
 **A link after every change.** Each write returns where the grid stands, what moved and a link. Your agent ends its reply with that link, so you watch your grid change as you go. The squares that moved light up. For connections with owner access, the link opens your log without a sign-in for 24 hours. That view can't change anything, and it stops working when you revoke the connection. Approving still needs your sign-in.
 
@@ -304,6 +309,7 @@ The setup page asks only for `PUBLISH` and `LANGUAGES`. Add the others later und
 | `LANGUAGES` | Languages of your names and questions, like `en` or `en,es` |
 | `OWNER_NAME` | The name at the top of your log |
 | `PUBLIC_URL` | Your custom domain, if you add one |
+| `CARD_IMAGES` | `"off"` stops the pictures of share cards. Links keep working with the default picture. |
 
 `PUBLISH_HOOK_URL` is an optional secret: a deploy hook called 1 minute after the public view changes, to rebuild a site that shows it. Set it with `npx wrangler secret put PUBLISH_HOOK_URL`, or as a Secret in the dashboard, so it survives redeploys and stays out of your repo.
 

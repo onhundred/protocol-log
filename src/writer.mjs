@@ -1,13 +1,17 @@
 // The single writer. Every change to the log goes through here, one at a time, so two agents
 // can never break a rule together. Reads go straight to D1.
 import { DurableObject } from "cloudflare:workers";
-import { compareViolations, gridChange, publicView, upgradeLevels, validate } from "../lib/protocol.mjs";
+import { cardFacts, compareViolations, gridChange, moments, publicView, upgradeLevels, validate } from "../lib/protocol.mjs";
+import { cardSummary, createCard, imagesQueued, releaseWaiting, shootOne, screenshotsOn, takeDown } from "./cards.mjs";
 import { OWNER_OPS, RULE_CHANGE_OPS, ToolError, clone, diffState, ops, restore } from "./ops.mjs";
-import { effectiveMeta, ensureSchema, getEvents, isPublished, loadState, saveDiff, upgradeDiff } from "./store.mjs";
+import { effectiveMeta, ensureSchema, getEvents, isPublished, listCards, loadState, saveDiff, upgradeDiff } from "./store.mjs";
 
 const HOOK_DELAY_MS = 60_000;
+const HOOK_TRIES = 5;
+const SHOT_GAP_MS = 2_000;
 // Setup forms can't leave a field empty, so anything that isn't an https URL means "no hook".
 const hookUrl = (env) => (/^https:\/\/\S+$/i.test(env.PUBLISH_HOOK_URL || "") ? env.PUBLISH_HOOK_URL : null);
+export const TAKEN_DOWN_NOTE = "The card is taken down. Chat apps keep previews they already showed.";
 
 export class Writer extends DurableObject {
   constructor(ctx, env) {
@@ -15,7 +19,7 @@ export class Writer extends DurableObject {
     this.queue = Promise.resolve();
   }
 
-  // input: { op, args, actor, access: "owner" | "agent", override?: boolean, reason?: string, directText?: boolean }
+  // input: { op, args, actor, access: "owner" | "agent", override?: boolean, reason?: string, directText?: boolean, origin?: string }
   // Without an op, it only saves what came due (a scheduled protocol upgrade).
   write(input) {
     const run = this.queue.then(() => this.apply(input));
@@ -23,9 +27,10 @@ export class Writer extends DurableObject {
     return run;
   }
 
-  async apply({ op, args = {}, actor, access, override = false, reason, directText = false }) {
+  async apply({ op, args = {}, actor, access, override = false, reason, directText = false, origin }) {
     const env = this.env;
     await ensureSchema(env.DB);
+    if (origin) await this.ctx.storage.put("origin", origin);
     const now = new Date().toISOString();
     const raw = await loadState(env.DB);
     const state = { ...raw, meta: effectiveMeta(raw.meta, env, now.slice(0, 10), raw.loops) };
@@ -78,16 +83,85 @@ export class Writer extends DurableObject {
 
     if (hookUrl(env) && (isPublished(state.meta, env) || isPublished(next.meta, env))) {
       const changed = JSON.stringify(publicView(state)) !== JSON.stringify(publicView(next));
-      if (changed && !(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now() + HOOK_DELAY_MS);
+      if (changed && !(await this.ctx.storage.get("hookAt"))) {
+        await this.ctx.storage.put("hookAt", Date.now() + HOOK_DELAY_MS);
+        await this.schedule(Date.now() + HOOK_DELAY_MS);
+      }
     }
-    return { ok: true, result: out.result, target: out.target, grid: gridChange(state, next), event: eventId, violations: after.length };
+
+    const cardOpts = { origin: origin || (await this.ctx.storage.get("origin")) || "", published: isPublished(next.meta, env), languages: next.meta.languages };
+    const extra = {};
+    if (op === "undo_event") {
+      const down = [];
+      for (const card of await listCards(env.DB, { eventId: args.id }))
+        if (!card.revoked_at) down.push((await takeDown(env, card, now)).id);
+      if (down.length) Object.assign(extra, { cardsTakenDown: down, note: TAKEN_DOWN_NOTE });
+    } else {
+      const found = moments(state, next, op, out.result);
+      if (found.length) extra.moment = await this.moment(found, next, eventId, now, cardOpts);
+    }
+    const released = await releaseWaiting(env, next, now);
+    if (released.length) extra.cardsReady = released.map((c) => cardSummary(c, cardOpts));
+    if (extra.moment?.card?.status === "ready" || released.length) await this.queueShots();
+
+    return { ok: true, result: out.result, target: out.target, grid: gridChange(state, next), event: eventId, violations: after.length, ...extra };
+  }
+
+  // One card per write: the biggest moment gets it, the others come back as facts for the agent's message.
+  async moment(found, next, eventId, now, cardOpts) {
+    const [top, ...rest] = found;
+    const also = rest.map((m) => ({ moment: m.moment, kind: m.kind, facts: cardFacts(next, m.moment, m.target).facts || null }));
+    const base = { kind: top.kind, moment: top.moment, also };
+    if (next.meta.cards === false) return { ...base, facts: cardFacts(next, top.moment, top.target).facts || null, card: { off: "cards are turned off in settings" } };
+    const made = await createCard(this.env, top, next, eventId, now);
+    if (made.none) return { ...base, facts: null, card: { none: made.none } };
+    return { ...base, facts: made.card.waiting ? null : made.card.facts, card: cardSummary(made.card, cardOpts) };
+  }
+
+  // Asks the alarm to work through queued card images. Called after writes, remakes and the nightly retry.
+  async queueShots(origin) {
+    if (origin) await this.ctx.storage.put("origin", origin);
+    if (!screenshotsOn(this.env)) return false;
+    await this.schedule(Date.now() + 1_000);
+    return true;
+  }
+
+  async schedule(at) {
+    const current = await this.ctx.storage.getAlarm();
+    if (!current || at < current) await this.ctx.storage.setAlarm(at);
   }
 
   async alarm() {
+    const storage = this.ctx.storage;
+    const hookAt = await storage.get("hookAt");
+    if (hookAt && hookAt <= Date.now()) await this.fireHook();
+    if (screenshotsOn(this.env)) {
+      const origin = await storage.get("origin");
+      if (origin && (await shootOne(this.env, origin)) && (await imagesQueued(this.env.DB))) await this.schedule(Date.now() + SHOT_GAP_MS);
+    }
+    const pending = await storage.get("hookAt");
+    if (pending) await this.schedule(pending);
+  }
+
+  async fireHook() {
+    const storage = this.ctx.storage;
     const url = hookUrl(this.env);
-    if (!url) return;
-    const res = await fetch(url, { method: "POST" });
-    if (!res.ok) throw new Error(`publish hook answered ${res.status}`);
+    const tries = ((await storage.get("hookTries")) || 0) + 1;
+    let ok = !url;
+    if (url) {
+      try {
+        const res = await fetch(url, { method: "POST" });
+        ok = res.ok;
+        if (!ok) console.log("publish hook answered", res.status);
+      } catch (err) {
+        console.log("publish hook failed", err?.message);
+      }
+    }
+    if (ok || tries >= HOOK_TRIES) {
+      await storage.delete(["hookAt", "hookTries"]);
+      return;
+    }
+    await storage.put({ hookAt: Date.now() + HOOK_DELAY_MS * tries, hookTries: tries });
   }
 }
 

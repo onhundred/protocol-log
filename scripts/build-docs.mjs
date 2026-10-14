@@ -1,4 +1,4 @@
-// Writes src/docs.mjs from docs/, so the Worker can serve the protocol, LOOPS.md and VOICE.md as
+// Writes src/docs.mjs from docs/, so the Worker can serve the protocol, LOOPS.md, VOICE.md and PLAYBOOK.md as
 // MCP resources without reading files at runtime. Run it after editing anything in docs/.
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -7,7 +7,7 @@ import P from "../protocol.json" with { type: "json" };
 import { checkFile, readDebt, report } from "./voicecheck.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DOCS = { protocol: "protocol.md", loops: "LOOPS.md", voice: "VOICE.md" };
+const DOCS = { protocol: "protocol.md", loops: "LOOPS.md", voice: "VOICE.md", playbook: "PLAYBOOK.md" };
 export const DOCS_MODULE = join(root, "src", "docs.mjs");
 
 export async function docsModule() {

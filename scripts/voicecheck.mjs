@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const DEBT_FILE = join(root, "scripts", "voice-debt.json");
-export const DOCUMENTS = ["README.md", "docs/protocol.md", "docs/LOOPS.md", "docs/VOICE.md"];
+export const DOCUMENTS = ["README.md", "docs/protocol.md", "docs/LOOPS.md", "docs/VOICE.md", "docs/PLAYBOOK.md"];
 export const MAX_WORDS = 20;
 export const MAX_GRADE = 8;
 // Below this a section is too short for a grade to mean anything.

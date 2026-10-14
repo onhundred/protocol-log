@@ -22,7 +22,7 @@ const call = async (key, name, args = {}) => {
   return { error: result.isError ? result.content[0].text : null, data: result.isError ? null : JSON.parse(result.content[0].text) };
 };
 
-const loop = (name, area = "P-HOM") => ({ area, name: { en: name }, doneWhen: { en: "The result is visible outside my head" } });
+const loop = (name, area = "P-HOM") => ({ area, name: { en: name }, doneWhen: { en: "The result is visible outside my head" }, evidence: "Calendar: a recurring block" });
 
 async function ownerCookie() {
   const res = await app().fetch(
@@ -469,7 +469,11 @@ describe("protocol versions", () => {
     expect(view.attribution).toMatchObject({ text: "Onhundred Protocol by Ale Sánchez", url: "https://onhundred.com" });
     const publicPage = await (await app().fetch(new Request(`${BASE}/`))).text();
     expect(publicPage).toMatch(/Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
-    expect(publicPage).toContain('Follows the <a href="https://onhundred.com" rel="noopener">Onhundred Protocol by Ale Sánchez</a>.');
+    expect(publicPage).toContain(
+      'Follows the <a href="https://onhundred.com" rel="noopener">Onhundred Protocol by Ale Sánchez</a> and <a href="https://4geeks.com" rel="noopener">4Geeks.com</a>.'
+    );
+    expect(publicPage).not.toContain("Your data lives in your Cloudflare account.");
+    expect(await ownerPage(cookie)).toContain("Your data lives in your Cloudflare account.");
     expect(publicPage).toContain(`<meta property="og:image" content="${BASE}/og.png">`);
   });
 

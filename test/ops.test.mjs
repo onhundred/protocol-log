@@ -26,7 +26,7 @@ const seed = async () => {
   return { meta: await read("log.json"), loops: await read("loops.json"), experiments: await read("experiments.json") };
 };
 
-const spec = (name, area = "P-HOM") => ({ area, name: { en: name }, doneWhen: { en: "The result is visible outside my head" } });
+const spec = (name, area = "P-HOM") => ({ area, name: { en: name }, doneWhen: { en: "The result is visible outside my head" }, evidence: "A monthly calendar block" });
 
 test("proposed loops get the next code and stay out of the inventory", () => {
   let s = write(empty(), "propose_loops", { loops: [spec("Pay the rent"), spec("Clean the kitchen")] });
@@ -147,7 +147,7 @@ test("levels only move through holds", () => {
   assert.equal(s.loops[0].level, "still");
   assert.ok(s.loops[0].baseline.approvedAt);
   s.loops[0].triage = { time: 4, frequency: 4, rules: 4, digital: 4, risk: 1, source: "baseline" };
-  s = write(s, "register_experiment", { slot: "easy", question: { en: "Can an agent pay the rent?" }, hypothesis: { en: "If it has the bank login, then it pays on time, because the amount never changes." }, loops: ["P-HOM-01"], goal: "assisted" }, page);
+  s = write(s, "register_experiment", { slot: "easy", question: { en: "Can an agent pay the rent?" }, hypothesis: { en: "If it has the bank login, then it pays on time, because the amount never changes." }, odds: 60, loops: ["P-HOM-01"], goal: "assisted" }, page);
   s = write(s, "register_stage_try", { experiment: "EXP-01", start: "2026-09-01", deadline: "2026-09-10", approach: "Draft the payment", successTests: "3 of 3 on time" });
   s = write(s, "close_stage_try", { experiment: "EXP-01", outcome: "achieved", closedAt: "2026-09-10" });
   assert.equal(s.loops[0].level, "still");
@@ -159,6 +159,7 @@ const easyCard = {
   slot: "easy",
   question: { en: "Can an agent pay the rent?" },
   hypothesis: { en: "If it has the bank login, then it pays on time, because the amount never changes." },
+  odds: 60,
   loops: ["P-HOM-01"],
   goal: "assisted",
 };
@@ -191,6 +192,72 @@ test("measuring is only for loops that aren't measured yet, and approving the co
   assert.equal(s.loops[0].level, "still");
   assert.throws(() => write(s, "record_baseline", { code: "P-HOM-01", occurrences: 3, hoursPerWeek: 1 }), /already measured/);
   assert.throws(() => write(s, "set_measuring", { code: "P-HOM-01", measuring: true }), /already measured/);
+});
+
+test("text an agent writes with guilt or hype is refused when it's saved, not only at approval", () => {
+  let s = write(empty(), "propose_loops", { loops: [spec("Pay the rent")] });
+  s = write(s, "approve_loops", { codes: ["P-HOM-01"] }, page);
+  assert.throws(() => write(s, "rename_loop", { code: "P-HOM-01", doneWhen: { en: "Rent is paid and we're crushing it" } }), /hype/);
+  assert.throws(() => write(s, "rename_loop", { code: "P-HOM-01", scope: { en: "You still haven't paid it twice this year." } }), /guilts the reader/);
+  assert.throws(() => write(empty(), "propose_loops", { loops: [{ ...spec("Pay the rent"), doneWhen: { en: "Paid on time, no excuses" } }] }), /guilts the reader/);
+  s = write(s, "rename_loop", { code: "P-HOM-01", doneWhen: { en: "The rent shows as paid in the bank" } });
+  assert.equal(pendingItems(s).length, 1);
+});
+
+test("odds are required on a new experiment, from 20 to 80, with an error that explains itself", () => {
+  const plain = /odds is required: ask the person what chance, from 20 to 80, they give the bet/;
+  const { odds, ...noOdds } = easyCard;
+  assert.equal(odds, 60);
+  assert.throws(() => write(scored("1.5"), "register_experiment", noOdds, page), plain);
+  assert.throws(() => write(scored("1.5"), "register_experiment", { ...easyCard, odds: 10 }, page), plain);
+  assert.throws(() => write(scored("1.5"), "register_experiment", { ...easyCard, odds: 85 }, page), plain);
+  assert.throws(() => write(scored("1.5"), "register_experiment", { ...easyCard, odds: 50.5 }, page), plain);
+  const s = write(scored("1.5"), "register_experiment", { ...easyCard, odds: 20 }, page);
+  assert.equal(s.experiments[0].odds, 20);
+});
+
+test("agents must say where a loop showed up; the owner doesn't", () => {
+  const { evidence, ...bare } = spec("Pay the rent");
+  assert.ok(evidence);
+  assert.throws(() => write(empty(), "propose_loops", { loops: [bare] }), /evidence is required/);
+  const s = write(empty(), "propose_loops", { loops: [bare] }, page);
+  assert.equal(s.loops.length, 1);
+  let t = write(empty(), "propose_loops", { loops: [spec("Pay the rent")] });
+  t = write(t, "approve_loops", { codes: ["P-HOM-01"] }, page);
+  assert.throws(() => write(t, "split_loop", { code: "P-HOM-01", into: [{ name: { en: "Pay the rent" }, doneWhen: { en: "Rent paid" } }, { name: { en: "Pay the water bill" }, doneWhen: { en: "Water paid" } }] }), /evidence is required/);
+});
+
+test("a first round longer than 1 check-in period comes back with a warning, not an error", () => {
+  let s = write(scored("1.5"), "register_experiment", easyCard, page);
+  s = write(s, "update_loop", { code: "P-HOM-01", estimate: { howOften: "monthly", hoursPerWeek: 0.5 } });
+  write(s, "register_stage_try", { ...round1, deadline: "2026-10-01" });
+  assert.equal(lastResult.warnings.length, 1);
+  assert.match(lastResult.warnings[0], /Round 1 runs 30 days/);
+  write(s, "register_stage_try", round1);
+  assert.equal(lastResult.warnings, undefined);
+});
+
+test("set_meta takes the challenge level, question kinds, cards and a pause; agents can't change them", () => {
+  let s = write(empty(), "set_meta", { challenge: "bold", questions: { romantic: false }, cards: false, pausedUntil: "2026-11-01" }, page);
+  assert.equal(s.meta.challenge, "bold");
+  assert.equal(s.meta.questions.romantic, false);
+  assert.equal(s.meta.cards, false);
+  assert.equal(s.meta.pausedUntil, "2026-11-01");
+  s = write(s, "set_meta", { pausedUntil: null }, page);
+  assert.equal(s.meta.pausedUntil, undefined);
+  assert.throws(() => write(s, "set_meta", { challenge: "loud" }, page), /challenge is off, gentle, normal, bold/);
+  assert.throws(() => write(s, "set_meta", { questions: { kids: true } }, page), /not a kind of question/);
+  assert.throws(() => write(s, "set_meta", { challenge: "off" }, { ...agent, access: "agent" }), /only the owner/);
+});
+
+test("the check-in is marked once per period inside its window, by the owner, never while paused", () => {
+  const inWindow = { ...empty(), meta: { ...empty().meta, mode: "frozen", cycle: 2, day: 13 } };
+  let s = write(inWindow, "mark_check_in", {}, page);
+  assert.deepEqual(s.meta.checkIns, [{ cycle: 2, at: page.now, by: "get_check_in" }]);
+  assert.throws(() => write(s, "mark_check_in", {}, page), /no check-in is due/);
+  assert.throws(() => write({ ...inWindow, meta: { ...inWindow.meta, day: 8 } }, "mark_check_in", {}, page), /no check-in is due/);
+  assert.throws(() => write({ ...inWindow, meta: { ...inWindow.meta, pausedUntil: "2026-10-20" } }, "mark_check_in", {}, page), /no check-in is due/);
+  assert.throws(() => write(inWindow, "mark_check_in", {}, { ...agent, access: "agent" }), /only the owner/);
 });
 
 test("diff and restore round-trip, which is what undo_event uses", () => {

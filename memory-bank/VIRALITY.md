@@ -40,18 +40,25 @@ The agent never just updates your list. When something happens, it talks to you 
 2. The Onhundred platform makes the card on its own, from your log. The agent doesn't draw it or write its numbers.
 3. The Onhundred connector hands the agent the facts and the card link.
 4. The agent writes its message and adds the link at the end, like a photo on a text.
-5. The link opens the card on onhundred.com, for example onhundred.com/c/7Kq2.
+5. The link opens a real page: the loop, the experiment or your log. For example, yourlog.com/loop/P-FIN-01?c=7Kq2xYz1.
 
 Sharing is just forwarding that link. There's nothing to download or design.
 
-### The card page
+### Where the link goes
 
-- **Hidden until shared.** Only people with the link can see it. Search engines can't find it.
+- **A loop moment** opens the loop page. **A bet** opens the experiment page. **A check-in** opens your log.
+- **A private log** has no public pages, so the link opens the card alone, at /c/7Kq2xYz1. Search engines can't find it.
 - **The preview is the card.** Paste the link in WhatsApp, iMessage, LinkedIn, X or Slack and the card shows up.
 - **One button to start:** "Start your 10." On a running bet: "Guess how it ends." On a loop that worked: "Steal this loop."
-- **It knows who shared it,** so we can count which cards bring people in.
-- **You can take it down** at any time. The link then shows nothing.
-- **Two image sizes for posting:** square (1080 × 1080) for posts, tall (1080 × 1920) for stories.
+- **It counts views,** but not yours and not the preview bots, so we can count which cards bring people in.
+- **You can take it down** at any time. The link then shows nothing. Chat apps keep previews they already showed.
+
+### Images are made in the background
+
+- A browser takes a picture of the card a few seconds after the moment. Until then, the link shows your log's default picture.
+- One picture at a time. A failed picture stays in line and gets another try.
+- **Two more sizes for posting,** made only when you ask: square (1080 × 1080) for posts, tall (1080 × 1920) for stories.
+- The first time you get a card, the agent asks once: "Want a square or story version to post?" Your log page has the same offer as a button.
 
 ### The 3 kinds of messages
 
@@ -63,17 +70,23 @@ Sharing is just forwarding that link. There's nothing to download or design.
 
 **Cards by moment**
 
-| Moment | Card says |
-| --- | --- |
-| Your list is done | "My 10 loops. Let's see what an agent can take." |
-| First green tile | "First loop handed off: get dinner on the table." |
-| A loop proves itself for 3 weeks | "It held. Pay monthly bills is now do it, I approve." |
-| First "do it alone" | "An agent now does this alone: keep the pantry stocked." |
-| A wrong bet | "I bet an agent couldn't plan date night. I was wrong." |
-| A check-in | Your 10 tiles today, with hours saved |
-| 10 of 10 | "All 10 handed off. Growing to 100." |
+| Moment | Card says | Picture |
+| --- | --- | --- |
+| Your list is done | "I'm handing my life to AI agents. Starting with these 10." | The 10 tiles, named |
+| A first round starts | "Will it work in 14 days?" | 2 vote buttons and a day bar. The buttons are only a picture for now |
+| First green tile | "My first loop is out of my hands." | The 10 tiles, with the green one lit |
+| A loop proves itself for 3 weeks | "Pay monthly bills: an AI did it for 3 weeks." | The 4 levels as steps, with NOW on the new one |
+| First "do it alone" | "An AI now does this alone." | The 4 steps, all lit |
+| A wrong bet | "I was wrong." | The bet crossed out, what we tried and what I learned. Orange |
+| A round that didn't pass | "Round 2 didn't pass. Not yet." | The rounds so far. Orange |
+| A check-in | "4.5 hours a week back." | 1 big number and the 10 tiles. Light paper |
+| 10 of 10 | "All 10." | The 10 tiles. Lime |
+
+Every card shows 10 loops: the ones with the most recent activity. On a new list, the 10 that take the most hours. They're numbered in the order their first round started, so "Loop 3 of 10" stays loop 3.
 
 Hours saved on a card always says if it's measured or estimated.
+
+To look at every card without a deployed log, run `node scripts/card-preview.mjs` and open the files it writes.
 
 ## Part 3: what makes people talk
 
@@ -87,9 +100,13 @@ Hours saved on a card always says if it's measured or estimated.
 
 This is where the funny, romantic and useful loops come from.
 
-The agent asks about your life, only if you say yes. One question at a time, never during a check-in.
+The agent asks about your life. Questions are on by default, one at a time, never during a check-in. Gap questions come first: a part of your life with no loops yet.
+
+The first time each kind comes up, the agent adds one line: "If you'd rather I don't ask personal questions, just say so." One sentence turns that kind off.
 
 **Examples of questions**
+- "Do you have a partner? I see nothing on your relationships yet. We could plan a weekly dinner, booked and reminded for you."
+- "Are you working? There's usually a lot to hand off."
 - "What do you always forget for your partner?"
 - "What do you dread every Sunday night?"
 - "What's one thing your family complains you never do?"
@@ -136,12 +153,23 @@ Every check-in is an episode. "Loop 3 of 10" makes people follow to see what hap
 These are rules in the agent's code, not suggestions in its prompt.
 
 1. **Time back beats time in the app.** If app time goes up but hours saved doesn't, we failed.
-2. **Personal questions are opt-in.** One tap stops them for good. The agent never asks about children's lives or health.
+2. **Questions are on by default. One sentence turns each kind off (gaps, personal, romantic).** The agent says so the first time each kind comes up.
 3. **Romantic loops help you. They don't stand in for you.** The agent can remember, plan and draft. It never sends something as you to your partner unless your partner knows. That's rule III of the method.
 4. **You choose what goes public.** Card pages are hidden until you share the link. A card never shows anyone else's name or details. You can turn card links off, or take any card down.
 5. **The pause rule stays.** If you're working more hours, the agent suggests a pause, even if that lowers our numbers.
 6. **No made-up numbers.** The platform makes every card from your log. The agent can't change it.
 7. **Challenges never guilt.** The agent can push you to try harder. It never shames you for going slow or stopping.
+8. **A pause is one answer away.** Say you're busy and the agent offers 2 or 4 weeks off. No challenges and no questions until it ends. Results still get their cards.
+
+### Limits that never change
+
+These hold whatever the settings say.
+
+- Never ask about children's lives or anyone's health.
+- Partner loops stay private until the partner agrees. No card while one is involved.
+- Never act as you toward your partner. The agent can plan, remember and draft.
+- Romantic ideas stay warm, never explicit.
+- Never write a video script.
 
 ## What we measure
 
@@ -159,7 +187,7 @@ These are rules in the agent's code, not suggestions in its prompt.
 ## What has to change
 
 - **The guide and the starter sheet.** Today they tell you to edit your list by hand. With this, the agent is the only way in. The sheet becomes a view you can read but not edit.
-- **The Onhundred platform.** It needs card pages at onhundred.com/c/, made from the log at each milestone.
-- **The Onhundred connector.** Each milestone tool returns the card link with the facts. It needs a new video brief tool too.
-- **The agent's playbook.** When it congratulates, challenges or tells the honest truth, which questions it asks and when. That's the next document.
+- **The Onhundred platform.** Done: each log makes its own cards at each milestone. Links open the loop, experiment or log page, or /c/ on a private log.
+- **The Onhundred connector.** Done: each write returns the moment and the card link. get_video_brief and manage_card are in.
+- **The agent's playbook.** Done: docs/PLAYBOOK.md. It says when to congratulate, challenge or be honest, and which questions to ask.
 - **The method PDF.** Section 13, Sharing results, needs a line on share cards and "steal this loop."

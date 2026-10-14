@@ -85,6 +85,21 @@ export async function viewerFrom(request, env) {
   return m ? checkViewPass(env, m.slice(VIEW_COOKIE.length + 1)) : null;
 }
 
+// Render tokens: let the screenshot browser open a card's render page for 10 minutes. Nobody else can.
+const RENDER_MS = 10 * 60000;
+
+export async function renderToken(env, cardId, now = Date.now()) {
+  const payload = `render.${cardId}.${now + RENDER_MS}`;
+  return `${payload}.${await hmac(env.COOKIE_ENCRYPTION_KEY || "", payload)}`;
+}
+
+export async function checkRenderToken(env, cardId, token) {
+  if (!configured(env) || typeof token !== "string") return false;
+  const [kind, id, exp, sig, ...rest] = token.split(".");
+  if (kind !== "render" || id !== cardId || !sig || rest.length || !(Number(exp) > Date.now())) return false;
+  return safeEqual(sig, await hmac(env.COOKIE_ENCRYPTION_KEY, `${kind}.${id}.${exp}`));
+}
+
 export async function isOwner(request, env) {
   if (!configured(env)) return false;
   const cookie = request.headers.get("Cookie") || "";

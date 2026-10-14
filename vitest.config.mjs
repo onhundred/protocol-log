@@ -9,6 +9,7 @@ export default defineConfig({
         bindings: {
           OWNER_PASSWORD: "test-owner-password",
           COOKIE_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
+          CARD_IMAGES: "off",
         },
       },
     }),

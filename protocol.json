@@ -139,6 +139,77 @@
       "the future of work"
     ],
     "retired": ["part", "parts", "task", "tasks", "test", "tests"],
-    "retiredAllowedAfter": ["success"]
+    "retiredAllowedAfter": ["success"],
+    "guilt": [
+      "you haven't",
+      "you still haven't",
+      "you forgot",
+      "you should have",
+      "falling behind",
+      "fall behind",
+      "don't break",
+      "break the streak",
+      "streak",
+      "no excuses",
+      "lazy",
+      "slacking"
+    ],
+    "hype": [
+      "crushing it",
+      "killing it",
+      "on fire",
+      "unstoppable",
+      "beast mode",
+      "nailed it",
+      "insane",
+      "mind-blowing",
+      "epic win"
+    ]
+  },
+  "cards": {
+    "headlines": {
+      "listDone": [
+        { "en": "I'm handing my life to AI agents. *Starting with these {count}.*", "es": "Le estoy pasando mi vida a agentes de IA. *Empiezo con estos {count}.*" },
+        { "en": "My list is done: {total} loops. *Now we see what an AI can take.*", "es": "Mi lista está lista: {total} loops. *Ahora vemos qué puede hacer una IA.*" },
+        { "en": "The list is frozen. *The handing off starts.*", "es": "La lista está congelada. *Empieza el traspaso.*" }
+      ],
+      "betPlaced": [
+        { "en": "Will it work in *{days} days?*", "es": "¿Funcionará en *{days} días?*" },
+        { "en": "An AI takes over today. *Will it hold?*", "es": "Una IA toma el control hoy. *¿Aguantará?*" },
+        { "en": "I placed a bet. *Guess how it ends.*", "es": "Hice una apuesta. *Adivina cómo termina.*" }
+      ],
+      "firstGreen": [
+        { "en": "My first loop is out of my hands. *{name}.*", "es": "Mi primer loop ya no está en mis manos. *{name}.*" },
+        { "en": "An AI now helps me with *{name}.*", "es": "Una IA ya me ayuda con *{name}.*" },
+        { "en": "Square 1 of {total} *is green.*", "es": "El cuadro 1 de {total} *está verde.*" }
+      ],
+      "itHeld": [
+        { "en": "{name}: *an AI did it for 3 weeks.*", "es": "{name}: *una IA lo hizo por 3 semanas.*" },
+        { "en": "It held for 3 weeks. *{name} is now {level}.*", "es": "Aguantó 3 semanas. *{name} ahora es {level}.*" },
+        { "en": "One more loop moved up. *{name}.*", "es": "Un loop más subió. *{name}.*" }
+      ],
+      "firstAlone": [
+        { "en": "An AI now does this alone. *{name}.*", "es": "Una IA ya hace esto sola. *{name}.*" },
+        { "en": "My first loop that runs *without me.*", "es": "Mi primer loop que corre *sin mí.*" }
+      ],
+      "wrongBet": [
+        { "en": "*I was wrong.*", "es": "*Me equivoqué.*" },
+        { "en": "My bet didn't hold. *That's a result.*", "es": "Mi apuesta no se cumplió. *Eso es un resultado.*" },
+        { "en": "I bet wrong on {code}. *That's a result.*", "es": "Aposté mal en {code}. *Eso es un resultado.*" }
+      ],
+      "roundMissed": [
+        { "en": "Round {round} didn't pass. *Not yet.*", "es": "La ronda {round} no pasó. *Todavía no.*" },
+        { "en": "Not this round. *I try again.*", "es": "Esta ronda no. *Lo intento de nuevo.*" }
+      ],
+      "checkIn": [
+        { "en": "{done} of my {count} loops are done by AI. *Check-in {cycle}.*", "es": "{done} de mis {count} loops los hace una IA. *Revisión {cycle}.*" },
+        { "en": "2 more weeks of *handing off my life.*", "es": "2 semanas más *pasándole mi vida a la IA.*" }
+      ],
+      "tenOfTen": [
+        { "en": "*All {count}.*", "es": "*Los {count}.*" },
+        { "en": "{handed} loops handed off. *Growing to {total}.*", "es": "{handed} loops entregados. *Vamos por {total}.*" },
+        { "en": "{count} loops now run *without me deciding each step.*", "es": "{count} loops ya corren *sin que yo decida cada paso.*" }
+      ]
+    }
   }
 }
