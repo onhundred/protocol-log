@@ -48,7 +48,7 @@ describe("fresh install", () => {
     const row = await env.DB.prepare("SELECT value FROM meta WHERE key = 'mode'").first();
     expect(JSON.parse(row.value)).toBe("building");
     const version = await env.DB.prepare("SELECT value FROM meta WHERE key = 'protocolVersion'").first();
-    expect(JSON.parse(version.value)).toBe("1.6");
+    expect(JSON.parse(version.value)).toBe("1.7");
   });
 
   it("keeps /public.json private until publishing", async () => {
@@ -62,17 +62,19 @@ describe("fresh install", () => {
     const before = await ownerPage();
     expect(before).toContain("No loops yet");
     const empties = (html) => html.match(/data-s="empty"/g) || [];
-    expect(empties(before.match(/<a class="grid mini"[\s\S]*?<\/a>/)[0])).toHaveLength(100);
-    expect(empties(before.match(/id="activity"[\s\S]*?<ul class="legend">/)[0])).toHaveLength(100);
-    expect(before).toMatch(/<li data-level="empty">[\s\S]*?<span class="n">100<\/span>/);
+    expect(empties(before.match(/<a class="grid mini" data-size="10"[\s\S]*?<\/a>/)[0])).toHaveLength(10);
+    expect(empties(before.match(/id="activity"[\s\S]*?<ul class="legend">/)[0])).toHaveLength(10);
+    expect(before).toMatch(/<li data-level="empty">[\s\S]*?<span class="n">10<\/span>/);
+    expect(before).toContain("OF 10<br>HANDED OFF");
     expect(before).toMatch(/<li data-level="still">[\s\S]*?<span class="n">0<\/span>/);
     expect(before).not.toContain('data-copy="#first-prompt"');
     expect(before).toContain('href="/connect">CONNECT YOUR AI');
+    expect(before).toMatch(/<li data-level="empty">[^]*?<a class="btn small legend-help" href="\/connect">CONNECT YOUR AI<\/a>/);
     expect(before).not.toContain("claude.ai/new");
 
     await createApiKey(env.DB, { name: "claude", access: "owner" });
     const after = await ownerPage();
-    const q = encodeURIComponent("Use Onhundred to help me build my 100 loops.");
+    const q = encodeURIComponent("Use Onhundred to help me build my 10 loops.");
     expect(after).toContain(`https://claude.ai/new?q=${q}`);
     expect(after).toContain(`https://chatgpt.com/?q=${q}`);
     expect(after).toContain(`https://grok.com/?q=${q}`);
@@ -167,10 +169,11 @@ describe("MCP with API keys", () => {
     expect(l.pending).toBeUndefined();
   });
 
-  it("refuses to freeze below 100 loops", async () => {
+  it("refuses to freeze below the list size, which starts at 10", async () => {
     const key = (await createApiKey(env.DB, { name: "claude", access: "owner" })).key;
+    expect((await call(key, "get_state")).data.settings.listSize).toBe(10);
     const r = await call(key, "freeze_inventory");
-    expect(r.error).toMatch(/exactly 100/);
+    expect(r.error).toMatch(/Freezing needs exactly 10\b/);
   });
 
   it("runs simultaneous writes one at a time with distinct codes", async () => {
@@ -218,13 +221,14 @@ describe("owner pages", () => {
     expect(page).toMatch(/<li data-level="still">[\s\S]*?STILL YOURS/);
     expect(page).toContain("DO IT, I APPROVE");
     expect(page).not.toMatch(/UNMAPPED|data-s="mapped"/);
-    expect(page).toMatch(/\d+ of 100 approved/);
+    expect(page).toMatch(/\d+ of 10 approved/);
+    expect(page).not.toContain("<dt>PROTOCOL</dt>");
     expect(page).toContain("HISTORY");
-    const cells = (html) => html.match(/class="cell"/g) || [];
+    const cells = (html) => html.match(/class="cell( tile)?"/g) || [];
     const grid = page.match(/<div class="grid" data-grid[\s\S]*?<ul class="legend">/)[0];
     expect(grid).toMatch(/data-loop=/);
-    expect(cells(grid)).toHaveLength(100);
-    expect(cells(page.match(/<a class="grid mini"[\s\S]*?<\/a>/)[0])).toHaveLength(100);
+    expect(cells(grid)).toHaveLength(10);
+    expect(cells(page.match(/<a class="grid mini"[\s\S]*?<\/a>/)[0])).toHaveLength(10);
     const connect = await (await app().fetch(new Request(`${BASE}/connect`, { headers: { Cookie: cookie } }))).text();
     expect(connect).toContain("https://grok.com/connectors");
     expect(connect).toContain(
@@ -258,6 +262,8 @@ describe("owner pages", () => {
     expect(page).toContain("data-approve-dialog");
     expect(page).toContain("Approving adds a loop to your list for good");
     expect(page).toContain("proposed loops that pass the rules");
+    expect(page).toMatch(/<p class="figure-note">[^<]*\d+ loop proposals to <a href="#proposals">review<\/a>\.<\/p>/);
+    expect(page).toContain('id="proposals"');
 
     const res = await app().fetch(
       new Request(`${BASE}/owner/action`, {
@@ -277,7 +283,7 @@ describe("owner pages", () => {
     const cookie = await ownerCookie();
     const res = await app().fetch(new Request(`${BASE}/export`, { headers: { Cookie: cookie } }));
     const snap = await res.json();
-    expect(snap.protocolVersion).toBe("1.6");
+    expect(snap.protocolVersion).toBe("1.7");
     expect(Array.isArray(snap.events)).toBe(true);
   });
 
@@ -399,14 +405,18 @@ describe("protocol versions", () => {
     ]);
   }
   const ownerPage = async (cookie) => (await app().fetch(new Request(`${BASE}/`, { headers: { Cookie: cookie } }))).text();
+  // Empty squares by area only exist on a list of 100.
+  const asHundred = () =>
+    env.DB.prepare("INSERT INTO meta (key, value) VALUES ('listSize', '100') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
 
-  it("offers ADOPT v1.6 on the owner page, and the button adopts it", async () => {
+  it("offers ADOPT v1.7 on the owner page, and the button adopts it", async () => {
     await onV10();
     const cookie = await ownerCookie();
     const before = await ownerPage(cookie);
     expect(before).toContain('name="op" value="adopt_protocol"');
-    expect(before).toContain("ADOPT v1.6");
+    expect(before).toContain("ADOPT v1.7");
     expect(before).toContain("takes effect now, since check-ins haven't started");
+    expect(before).toContain('<a class="brand" href="/"><img src="/wordmark.svg" alt="Onhundred" width="68" height="9"><span>PROTOCOL v1.0');
 
     const res = await app().fetch(
       new Request(`${BASE}/owner/action`, {
@@ -417,10 +427,13 @@ describe("protocol versions", () => {
       })
     );
     expect(res.status).toBe(303);
-    expect(decodeURIComponent(res.headers.get("Location"))).toContain("Protocol v1.6 is adopted.");
+    expect(decodeURIComponent(res.headers.get("Location"))).toContain("Protocol v1.7 is adopted.");
     const after = await ownerPage(cookie);
-    expect(after).not.toContain("ADOPT v1.6");
-    expect(after).toMatch(/Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
+    expect(after).not.toContain("ADOPT v1.7");
+    expect(after).toMatch(
+      /<div class="brand">.*<details class="note term version-note" data-menu><summary>PROTOCOL v1\.7<\/summary><span class="note-pop" role="note">Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/
+    );
+    expect(after).not.toContain("<dt>PROTOCOL</dt>");
     expect(after).not.toContain("Handed off went from 0 to 0");
   });
 
@@ -433,29 +446,29 @@ describe("protocol versions", () => {
     expect((await call(key, "approve_loops", { codes: [code] })).error).toBeNull();
 
     const state = (await call(key, "get_state")).data;
-    expect(state.protocolVersion).toMatchObject({ log: "1.0", template: "1.6", upgradeAvailable: true });
-    expect(state.metrics.delegated).toMatch(/ of 100$/);
+    expect(state.protocolVersion).toMatchObject({ log: "1.0", template: "1.7", upgradeAvailable: true });
+    expect(state.metrics.delegated).toMatch(/ of 10$/);
     const ahead = (await call(key, "list_pending")).data.breaksNewRules;
-    expect(ahead).toMatchObject({ version: "1.6", adopted: false });
+    expect(ahead).toMatchObject({ version: "1.7", adopted: false });
     expect(ahead.items.some((m) => m.startsWith(`${code}: name`))).toBe(true);
 
     const tools = (await mcp(key, "tools/list")).body.result.tools;
     expect(tools.find((t) => t.name === "adopt_protocol").annotations.destructiveHint).toBe(true);
     const adopted = await call(key, "adopt_protocol");
     expect(adopted.error).toBeNull();
-    expect(adopted.data.result).toMatchObject({ from: "1.0", to: "1.6", takesEffect: "now" });
+    expect(adopted.data.result).toMatchObject({ from: "1.0", to: "1.7", takesEffect: "now" });
     expect(adopted.data.result.breaksNewRules.some((m) => m.startsWith(code))).toBe(true);
-    expect(adopted.data.result.protocolChange).toMatchObject({ from: "1.0", to: "1.6" });
-    expect((await call(key, "adopt_protocol")).error).toMatch(/already runs v1.6/);
+    expect(adopted.data.result.protocolChange).toMatchObject({ from: "1.0", to: "1.7" });
+    expect((await call(key, "adopt_protocol")).error).toMatch(/already runs v1.7/);
 
     const now = (await call(key, "list_pending")).data.breaksNewRules;
-    expect(now).toMatchObject({ version: "1.6", adopted: true });
+    expect(now).toMatchObject({ version: "1.7", adopted: true });
     expect((await call(key, "propose_loops", { loops: [loop("Choose the summer camp", "R-KID")] })).error).toMatch(/failing verb \(choose\)/);
 
     const cookie = await ownerCookie();
     const page = await ownerPage(cookie);
-    expect(page).toContain("Breaks v1.6 rules");
-    expect(page).toContain(`data-fix="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.6 rules: name (en) starts with a failing verb (decide).`);
+    expect(page).toContain("Breaks v1.7 rules");
+    expect(page).toContain(`data-fix="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.7 rules: name (en) starts with a failing verb (decide).`);
     expect(page).toContain(`aria-label="Fix ${code} with AI"`);
     expect(page).toMatch(new RegExp(`data-target="${code}"><svg[^]*?</svg>FIX</button></li>`));
     expect(page).toContain("data-fix-dialog");
@@ -464,11 +477,11 @@ describe("protocol versions", () => {
 
     expect((await call(key, "set_meta", { publish: true })).error).toBeNull();
     const view = await (await app().fetch(new Request(`${BASE}/public.json`))).json();
-    expect(view.protocolVersion).toBe("1.6");
-    expect(view.protocolChange).toMatchObject({ from: "1.0", to: "1.6" });
+    expect(view.protocolVersion).toBe("1.7");
+    expect(view.protocolChange).toMatchObject({ from: "1.0", to: "1.7" });
     expect(view.attribution).toMatchObject({ text: "Onhundred Protocol by Ale Sánchez", url: "https://onhundred.com" });
     const publicPage = await (await app().fetch(new Request(`${BASE}/`))).text();
-    expect(publicPage).toMatch(/Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
+    expect(publicPage).toMatch(/<summary>PROTOCOL v1\.7<\/summary><span class="note-pop" role="note">Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
     expect(publicPage).toContain(
       'Follows the <a href="https://onhundred.com" rel="noopener">Onhundred Protocol by Ale Sánchez</a> and <a href="https://4geeks.com" rel="noopener">4Geeks.com</a>.'
     );
@@ -484,7 +497,7 @@ describe("protocol versions", () => {
     expect((await call(key, "adopt_protocol")).error).toBeNull();
 
     const page = await ownerPage(await ownerCookie());
-    expect(page).toContain(`data-fix-prompt="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.6 rules: name (en) starts with a failing verb (decide).`);
+    expect(page).toContain(`data-fix-prompt="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.7 rules: name (en) starts with a failing verb (decide).`);
     expect(page).toMatch(/data-dialog-close data-rule-fix><svg[^]*?<\/svg>FIX<\/button>/);
     expect(page.match(/data-fix-dialog/g)).toHaveLength(1);
     expect(page).toContain('<textarea class="prompt-box" id="fix-prompt"');
@@ -497,8 +510,52 @@ describe("protocol versions", () => {
     expect(page).toMatch(/<div class="card-tools"><div class="tabs"[^]*?<\/div><button[^>]*data-add-loop><svg[^]*?<\/svg>ADD NEW LOOP<\/button>/);
     expect(page.match(/data-add-loop-dialog/g)).toHaveLength(1);
     expect(page).toMatch(/<textarea class="prompt-box" id="add-loop-prompt"[^>]*>Use Onhundred to help me add new loops to my log\./);
+    expect(page).toMatch(/<input class="field" type="text" id="add-loop-answer"[^>]*aria-labelledby="add-loop-ask">/);
+    expect(page).toContain("data-template=\"Use Onhundred to help me add new loops to my log. I have this in mind: &quot;{answer}&quot;.");
     expect(page).toContain('data-prompt-source="#add-loop-prompt"');
     expect(page).toContain('data-app-href="https://claude.ai/new?q={q}"');
+  });
+
+  it("offers GET HELP on the empty slots legend item, with a prompt that counts the empty slots per area", async () => {
+    await asHundred();
+    await createApiKey(env.DB, { name: "claude", access: "agent" });
+    const page = await ownerPage(await ownerCookie());
+    expect(page).toMatch(/<li data-level="empty">[^]*?you still need to pick what to delegate here/);
+    expect(page).toMatch(/<li data-level="empty">[^]*?data-open-dialog="#fill-slots-dialog"><svg[^]*?<\/svg>GET HELP<\/button>/);
+    expect(page).toMatch(/<textarea class="prompt-box" id="fill-slots-prompt"[^>]*>Use Onhundred to help me fill my empty slots\. I have \d+ left: \d+ in Relationships, \d+ in Personal and \d+ in Company\./);
+    expect(page).toContain('data-prompt-source="#fill-slots-prompt"');
+    expect(page).toMatch(/<h3 id="fill-slots-title">Let your AI app find your loops<\/h3>\n<p class="modal-loop">You have \d+ empty squares?\. Your AI app looks for tasks you repeat/);
+    expect(page).toContain("<li>Shows you the list before it proposes anything. You approve each loop on this page.</li>");
+  });
+
+  it("explains what a loop is when the highlighted word in the grid key is clicked", async () => {
+    const page = await ownerPage(await ownerCookie());
+    expect(page).toMatch(/<div class="key-note">Each square is a <details class="note term" data-menu><summary>loop<\/summary><span class="note-pop" role="note"><b>What's a loop\?<\/b> A task that keeps coming back/);
+  });
+
+  it("gives empty slots a tooltip that says a click explains how to fill them", async () => {
+    await asHundred();
+    const page = await ownerPage(await ownerCookie());
+    expect(page).toMatch(/data-tip="[^"]*&quot;empty&quot;:&quot;No {area} activity has been decided to delegate here\. Click to see how to fill it\./);
+  });
+
+  it("asks what to automate from FILL THIS LOOP, with a short prompt the page fills in", async () => {
+    await asHundred();
+    await createApiKey(env.DB, { name: "claude", access: "agent" });
+    const page = await ownerPage(await ownerCookie());
+    expect(page).toMatch(/data-empty-dialog[^]*?data-open-dialog="#fill-one-dialog"><svg[^]*?<\/svg>FILL THIS LOOP<\/button>/);
+    expect(page).toMatch(/<dialog class="modal" data-dialog id="fill-one-dialog" data-fill-one data-template="Use Onhundred to fill 1 empty square in my \{area\} area\. I want to automate: &quot;\{answer\}&quot;\./);
+    expect(page).toContain("&quot;personal&quot;:&quot;Personal&quot;");
+    expect(page).toMatch(/<h3 id="fill-one-title">What do you want to automate\?<\/h3>[^]*?<input class="field" type="text" id="fill-one-answer"/);
+    expect(page).toContain('data-prompt-source="#fill-one-prompt"');
+  });
+
+  it("explains an empty slot in a dialog, with GET HELP", async () => {
+    await createApiKey(env.DB, { name: "claude", access: "agent" });
+    const page = await ownerPage(await ownerCookie());
+    expect(page).toMatch(/<dialog class="modal" data-dialog data-empty-dialog[^]*?<h3 id="empty-title">This square is empty<\/h3>/);
+    expect(page).not.toContain("data-empty-area");
+    expect(page).toMatch(/data-empty-dialog[^]*?<button class="btn fix-btn" type="button" data-dialog-close data-open-dialog="#fill-slots-dialog"><svg[^]*?<\/svg>GET HELP<\/button>/);
   });
 
   it("saves a scheduled upgrade once its cycle starts, as a system event", async () => {
@@ -543,6 +600,10 @@ describe("loop pages", () => {
     expect(page).toContain("DONE WHEN</span>The result is visible outside my head");
     expect(page).toContain("Calendar: Sunday cooking block");
     expect(page).toContain("data-level-stack");
+    expect(page).toContain('data-open-dialog="#lvl-dialog-delegated"');
+    expect(page).toContain('<h3 id="lvl-dialog-delegated-title">How to move this loop to <span class="lvl-target">Do it, I approve</span></h3>');
+    expect(page).toContain('Then the same again for <span class="lvl-word"><i class="cell" data-s="delegated"></i>Do it, I approve</span>: one round per level.');
+    expect(page).not.toContain("start-exp-dialog");
     expect(page).toContain("NO EXPERIMENTS YET");
     expect(page).toContain("Approved by the owner");
     expect(page).toContain("score 13, Automate now");
@@ -554,6 +615,14 @@ describe("loop pages", () => {
 
     const log = await (await get("/", cookie)).text();
     expect(log).toContain(`data-loop="${code}"`);
+
+    expect((await call(key, "record_baseline", { code, occurrences: 4, hoursPerWeek: 2 })).error).toBeNull();
+    expect((await call(key, "approve_baseline", { code })).error).toBeNull();
+    const ready = await (await get(`/loop/${code}`, cookie)).text();
+    expect(ready).toContain('To make progress on this loop, you need to <button class="link-btn" type="button" data-open-dialog="#start-exp-dialog"');
+    expect(ready).toContain('<h3 id="start-exp-title">How to start an experiment</h3>');
+    expect(ready).toContain("This loop can be the easy pick.");
+    expect(ready).toContain("This one is measured already.");
   });
 
   it("canonicalizes the code and answers 404 for codes that aren't loops", async () => {
@@ -654,8 +723,7 @@ describe("publishing from the owner page", () => {
     expect(owner).toContain("FOLLOW SAM");
     expect(owner).toContain(`id="share-url" value="${BASE}/"`);
     expect(owner).toContain(`https://x.com/intent/post?text=${encodeURIComponent("Sam Rivera ")}`);
-    expect(owner).toContain('data-open-dialog="[data-profile-dialog]">EDIT WITH AI');
-    expect(owner).toContain("set_meta with about and links");
+    expect(owner).not.toContain("data-profile-dialog");
 
     expect((await call(key, "set_meta", { about: null, links: null })).error).toBeNull();
     const cleared = await (await app().fetch(new Request(`${BASE}/`))).text();
@@ -707,7 +775,8 @@ describe("publishing from the owner page", () => {
     const after = await ownerPage();
     expect(after).not.toContain("Visitors can't follow you yet.");
     expect(after).toContain('value="https://x.com/samrivera"');
-    expect(after).toContain('data-open-dialog="[data-links-dialog]">EDIT LINKS');
+    expect(after).toMatch(/<\/ul> <button class="pencil" type="button" data-open-dialog="\[data-links-dialog\]" aria-label="Edit your links"/);
+    expect(after).not.toContain(">ADD LINKS");
 
     const none = await post({ none: "1", link_x: "@samrivera" });
     expect(none.status).toBe(303);
@@ -949,5 +1018,114 @@ describe("links after writes", () => {
     expect(data.links.graph).toBe(`${BASE}/#activity`);
     expect(data.links.expiresAt).toBeUndefined();
     expect(JSON.stringify(data.links)).not.toContain("/v/");
+  });
+});
+
+describe("a list of 10", () => {
+  it("draws 1 block of 4 per row with each loop's name, a 5 by 2 small grid, and counts out of 10", async () => {
+    const key = (await createApiKey(env.DB, { name: "claude", access: "owner" })).key;
+    const set = await call(key, "set_meta", { listSize: 10 });
+    expect(set.error).toBeNull();
+    const state = (await call(key, "get_state")).data;
+    expect(state.metrics.delegated).toMatch(/ of 10$/);
+    const active = state.loops.active;
+
+    const cookie = await ownerCookie();
+    const page = await (await app().fetch(new Request(`${BASE}/`, { headers: { Cookie: cookie } }))).text();
+    expect(page).toContain("OF 10<br>HANDED OFF");
+    expect(page).toContain(`${active} of 10 approved`);
+    const grid = page.match(/<div class="grid" data-grid data-size="10"[\s\S]*?<ul class="legend">/)[0];
+    expect(grid).toContain('role="group"');
+    expect(grid).toContain('style="grid-template-columns:repeat(4, minmax(0, 1fr))"');
+    expect(grid.match(/<li class="cell tile"/g)).toHaveLength(10);
+    expect(grid.match(/<li class="cell tile" data-s="empty">/g) || []).toHaveLength(10 - active);
+    expect(grid).toMatch(/<span class="tile-area">[^<]+<\/span><span class="tile-name">[^<]+<\/span>/);
+    expect(grid).not.toContain("tile-code");
+    expect(grid).not.toContain('class="area"');
+    const mini = page.match(/<a class="grid mini" data-size="10"[\s\S]*?<\/a>/)[0];
+    expect(mini.match(/class="cell"/g)).toHaveLength(10);
+    expect(mini).not.toContain("area-letter");
+    expect(page).toMatch(new RegExp(`<li data-level="empty">[\\s\\S]*?<span class="n">${10 - active}</span>`));
+    expect(page).toContain("I have " + (10 - active) + " left on my list of 10.");
+    expect(page).toContain("&quot;empty&quot;:&quot;No activity has been decided to delegate here.");
+    expect(page).toContain('data-template="Use Onhundred to fill 1 empty square on my list of 10.');
+
+    expect((await call(key, "set_meta", { listSize: 100 })).error).toBeNull();
+  });
+});
+
+describe("a log in English and Spanish", () => {
+  const get = async (path, headers = {}) => {
+    const res = await app().fetch(new Request(`${BASE}${path}`, { headers, redirect: "manual" }));
+    return { res, html: await res.text() };
+  };
+  const htmlLang = (html) => /<html lang="(\w+)"/.exec(html)?.[1];
+
+  it("an English-only log has no switch and ignores ?lang=", async () => {
+    const { res, html } = await get("/?lang=es");
+    expect(htmlLang(html)).toBe("en");
+    expect(html).not.toContain("lang-switch");
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("opens in the asked language, then the saved one, then the browser's, and links say which", async () => {
+    const key = (await createApiKey(env.DB, { name: "claude", access: "owner" })).key;
+    const set = await call(key, "set_meta", { languages: ["en", "es"] });
+    expect(set.error).toBeNull();
+    expect(set.data.result.missingCount).toBeGreaterThan(0);
+    expect(set.data.result.missingTranslations[0].missing).toBeTruthy();
+    expect(set.data.links.open).toMatch(/[?&]lang=en(#|$)/);
+    expect(Object.keys(set.data.links.byLanguage)).toEqual(["en", "es"]);
+    expect(set.data.links.byLanguage.es.graph).toMatch(/^https:\/\/log\.example\.com\/v\/[^?#]+\?lang=es$/);
+
+    try {
+      expect(htmlLang((await get("/")).html)).toBe("en");
+      expect(htmlLang((await get("/", { "Accept-Language": "es-MX,es;q=0.9,en;q=0.8" })).html)).toBe("es");
+
+      const asked = await get("/?lang=es");
+      expect(htmlLang(asked.html)).toBe("es");
+      expect(asked.html).toContain('<span class="lang-switch"');
+      expect(asked.html).toContain('href="?lang=en"');
+      expect(asked.res.headers.get("Set-Cookie")).toMatch(/^__Host-onhundred-lang=es; Path=\/; Secure; SameSite=Lax/);
+      expect(asked.res.headers.get("Vary")).toContain("Accept-Language");
+
+      const saved = "__Host-onhundred-lang=en";
+      expect(htmlLang((await get("/", { Cookie: saved, "Accept-Language": "es" })).html)).toBe("en");
+      expect((await get("/?lang=en", { Cookie: saved })).res.headers.get("Set-Cookie")).toBeNull();
+      expect((await get("/?lang=en", { Cookie: "__Host-onhundred-lang=es" })).res.headers.get("Set-Cookie")).toMatch(/^__Host-onhundred-lang=en;/);
+
+      const owner = await ownerCookie();
+      const code = (await env.DB.prepare("SELECT code FROM loops WHERE proposed = 0 LIMIT 1").first()).code;
+      const exp = (await env.DB.prepare("SELECT code FROM experiments LIMIT 1").first())?.code;
+      for (const path of [`/loop/${code}?lang=es`, ...(exp ? [`/exp/${exp}?lang=es`] : []), "/login?lang=es", "/connect?lang=es"]) {
+        expect(htmlLang((await get(path, { Cookie: owner })).html), path).toBe("es");
+      }
+      expect(htmlLang((await get("/login", { "Accept-Language": "es" })).html)).toBe("es");
+
+      const ownerPage = (await get("/?lang=es", { Cookie: owner })).html;
+      expect(ownerPage).toContain('class="lang-tag"');
+
+      const pass = /\/v\/([^?#]+)/.exec(set.data.links.byLanguage.es.graph)[1];
+      const viewed = await get(`/v/${pass}?to=/loop/${code}&lang=es`);
+      expect(viewed.res.status).toBe(302);
+      expect(viewed.res.headers.get("Location")).toBe(`/loop/${code}?lang=es`);
+    } finally {
+      expect((await call(key, "set_meta", { languages: ["en"] })).error).toBeNull();
+    }
+  });
+
+  it("a Spanish-first log gives its prompts in Spanish and tells the agent to speak it", async () => {
+    const key = (await createApiKey(env.DB, { name: "claude", access: "owner" })).key;
+    expect((await call(key, "set_meta", { languages: ["es", "en"] })).error).toBeNull();
+    try {
+      const prompts = (await mcp(key, "prompts/list")).body.result.prompts;
+      expect(prompts.every((p) => p.title && p.description)).toBe(true);
+      const en = (await import("../src/i18n.mjs")).t("en", `prompts.${prompts[0].name}.title`);
+      expect(prompts[0].title).not.toBe(en);
+      const got = (await mcp(key, "prompts/get", { name: prompts[0].name })).body.result;
+      expect(got.messages[0].content.text).toMatch(/Talk to me in Spanish\.$/);
+    } finally {
+      expect((await call(key, "set_meta", { languages: ["en"] })).error).toBeNull();
+    }
   });
 });

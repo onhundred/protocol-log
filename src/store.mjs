@@ -1,5 +1,5 @@
 // D1 access: load the whole log (it's small) and save a diff plus its event in one batch.
-import { QUESTION_KINDS, protocol as P, upgradeLevels, versionChange } from "../lib/protocol.mjs";
+import { QUESTION_KINDS, isActive, protocol as P, upgradeLevels, versionChange } from "../lib/protocol.mjs";
 import { SCHEMA_VERSION, STATEMENTS } from "./schema.mjs";
 
 const DAY = 86400000;
@@ -48,7 +48,9 @@ export async function loadState(db) {
 }
 
 // Settings the owner hasn't stored fall back to the Worker's vars, then to protocol defaults.
-// loops: needed to apply a scheduled protocol upgrade once its cycle starts.
+// loops: needed to apply a scheduled protocol upgrade once its cycle starts, and to pick the list size.
+// A log that never chose a size starts at 10 (protocol 3.1). One holding more than 10 active loops was built
+// as a list of 100 before sizes existed, so it stays at 100. A write never sees the size move: it's picked on load.
 export function effectiveMeta(meta, env, today, loops = []) {
   const languages = String(env.LANGUAGES || "en")
     .split(",")
@@ -56,6 +58,7 @@ export function effectiveMeta(meta, env, today, loops = []) {
     .filter(Boolean);
   const m = {
     mode: "building",
+    listSize: loops.filter(isActive).length > 10 ? P.limits.loops : 10,
     protocolVersion: P.version,
     languages,
     ownerName: env.OWNER_NAME || "",

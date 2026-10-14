@@ -1,7 +1,8 @@
 {
   "sample": true,
-  "protocolVersion": "1.6",
+  "protocolVersion": "1.7",
   "mode": "frozen",
+  "listSize": 100,
   "inventoryVersion": 1,
   "languages": ["en", "es"],
   "ownerName": "Ale Sánchez",

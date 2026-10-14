@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { compareViolations, pendingRuleBreaks, validate } from "../lib/protocol.mjs";
-import { RULE_CHANGE_OPS, ToolError, clone, diffState, ops, pendingItems, restore } from "../src/ops.mjs";
+import { ToolError, clone, diffState, measuredFrom, ops, pendingItems, restore } from "../src/ops.mjs";
 import { effectiveMeta, upgradeDiff } from "../src/store.mjs";
 
 const empty = (protocolVersion = "1.5") => ({ meta: { mode: "building", protocolVersion, languages: ["en"] }, loops: [], experiments: [] });
@@ -15,7 +15,7 @@ let lastResult;
 function write(state, op, args, ctx = agent) {
   const next = clone(state);
   const out = ops[op](next, args, ctx);
-  const cmp = compareViolations(validate(RULE_CHANGE_OPS.has(op) ? { ...state, meta: next.meta } : state), validate(next));
+  const cmp = compareViolations(validate(measuredFrom(op, args, state, next)), validate(next));
   if (!cmp.ok) throw new ToolError(cmp.added.map((v) => v.message).join(" "));
   lastResult = out.result;
   return next;
@@ -52,13 +52,13 @@ test("adopt_protocol applies at once before check-ins start, records the change 
   delete s.meta.cycleOneStart;
   s.loops[0].name.en = "Decide where we eat out";
   s = write(s, "adopt_protocol", {}, { ...page, cycle: 0 });
-  assert.equal(s.meta.protocolVersion, "1.6");
-  assert.deepEqual(s.meta.protocolChange, { from: "1.0", to: "1.6", at: "2026-10-12", cycle: 0, until: "2026-10-26", delegatedBefore: 7, delegatedAfter: 8.5 });
+  assert.equal(s.meta.protocolVersion, "1.7");
+  assert.deepEqual(s.meta.protocolChange, { from: "1.0", to: "1.7", at: "2026-10-12", cycle: 0, until: "2026-10-26", delegatedBefore: 7, delegatedAfter: 8.5 });
   assert.equal(lastResult.takesEffect, "now");
   assert.equal(lastResult.breaksNewRules.length, 1);
   assert.match(lastResult.breaksNewRules[0], new RegExp(`^${s.loops[0].code}: name \\(en\\) starts with a failing verb \\(decide\\)`));
   assert.equal(pendingRuleBreaks(s).items.length, 1);
-  assert.throws(() => write(s, "adopt_protocol", {}, page), /already runs v1.6/);
+  assert.throws(() => write(s, "adopt_protocol", {}, page), /already runs v1.7/);
 });
 
 test("adopt_protocol waits for the next check-in once they have started", async () => {
@@ -66,7 +66,7 @@ test("adopt_protocol waits for the next check-in once they have started", async 
   s.meta.protocolVersion = "1.0";
   s = write(s, "adopt_protocol", {}, { ...page, cycle: 16 });
   assert.equal(s.meta.protocolVersion, "1.0");
-  assert.deepEqual(s.meta.protocolUpgrade, { version: "1.6", fromCycle: 17, adoptedAt: page.now });
+  assert.deepEqual(s.meta.protocolUpgrade, { version: "1.7", fromCycle: 17, adoptedAt: page.now });
   assert.equal(lastResult.takesEffect, "after check-in 16");
   assert.throws(() => write(s, "adopt_protocol", {}, page), /takes effect after check-in 16/);
 });
@@ -137,6 +137,55 @@ test("owner-only writes refuse agent access", () => {
 
 test("freeze_inventory needs exactly 100 approved loops", () => {
   assert.throws(() => write(empty(), "freeze_inventory", {}, page), /Freezing needs exactly 100/);
+});
+
+const CHORES = ["Pay the rent", "Clean the kitchen", "Do the laundry", "Buy the groceries", "Water the plants", "Take out the trash", "Book the dentist", "Renew the car insurance", "File the receipts", "Walk the dog", "Mow the lawn"];
+const approved = (state, names) => {
+  const s = write(state, "propose_loops", { loops: names.map((name) => spec(name)) });
+  return write(s, "approve_loops", { codes: s.loops.filter((l) => l.proposed).map((l) => l.code) }, page);
+};
+
+test("set_meta listSize: 10 or 100, set while building, never smaller than the approved loops", () => {
+  assert.throws(() => write(empty(), "set_meta", { listSize: 50 }, page), /listSize is 10 or 100/);
+  assert.equal(write(empty(), "set_meta", { listSize: 10 }, page).meta.listSize, 10);
+  assert.throws(() => write(approved(empty(), CHORES), "set_meta", { listSize: 10 }, page), /11 approved loops/);
+});
+
+test("a list of 10 freezes at 10, grows to 100 at a check-in, and never shrinks", () => {
+  let s = write(empty(), "set_meta", { listSize: 10 }, page);
+  s = approved(s, CHORES.slice(0, 9));
+  assert.throws(() => write(s, "freeze_inventory", {}, page), /Freezing needs exactly 10\b/);
+  assert.throws(() => write(s, "grow_list", {}, page), /freeze your 10 loops first/);
+  s = approved(s, CHORES.slice(9, 10));
+  s = write(s, "freeze_inventory", {}, page);
+  assert.deepEqual([s.meta.mode, s.meta.inventoryVersion, lastResult.listSize], ["frozen", 1, 10]);
+  assert.throws(() => write(s, "set_meta", { listSize: 100 }, page), /your list is frozen/);
+
+  const midPeriod = { ...s, meta: { ...s.meta, cycle: 1, day: 5 } };
+  assert.throws(() => write(midPeriod, "grow_list", {}, page), /grows at a check-in/);
+  assert.throws(() => write(s, "grow_list", {}, { ...agent, access: "agent" }), /only the owner/);
+  const grown = write({ ...s, meta: { ...s.meta, cycle: 1, day: 13 } }, "grow_list", {}, page);
+  assert.deepEqual([grown.meta.listSize, grown.meta.mode, grown.meta.inventoryVersion], [100, "building", 1]);
+  assert.deepEqual(grown.loops.map((l) => [l.code, l.level]), s.loops.map((l) => [l.code, l.level]), "every loop keeps its code and level");
+  assert.throws(() => write(grown, "set_meta", { listSize: 10 }, page), /never shrinks/);
+  assert.throws(() => write(grown, "grow_list", {}, page), /only a list of 10 can grow/);
+});
+
+test("a log that never chose a size starts at 10; one already past 10 loops stays at 100", () => {
+  const size = (meta, loops) => effectiveMeta(meta, {}, "2026-10-14", loops).listSize;
+  const loops = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ code: `P-HOM-${String(i + 1).padStart(2, "0")}`, level: "still", ...extra }));
+  assert.equal(size({}, []), 10);
+  assert.equal(size({}, loops(10)), 10);
+  assert.equal(size({}, loops(11)), 100);
+  assert.equal(size({}, loops(11, { proposed: true })), 10, "proposed loops aren't on the list yet");
+  assert.equal(size({ listSize: 100 }, []), 100, "a stored size always wins");
+});
+
+test("freezing again after growth makes the next version of the list", async () => {
+  const s = await seed();
+  s.meta = { ...s.meta, mode: "building", inventoryVersion: 1, listSize: 100 };
+  const next = write(s, "freeze_inventory", {}, page);
+  assert.deepEqual([next.meta.mode, next.meta.inventoryVersion], ["frozen", 2]);
 });
 
 test("levels only move through holds", () => {
@@ -267,4 +316,45 @@ test("diff and restore round-trip, which is what undo_event uses", () => {
   const undone = clone(b);
   restore(undone, diff.before);
   assert.deepEqual(undone, a);
+});
+
+test("adding a language is accepted and lists every text to translate, while the rest of the call is still checked", () => {
+  let s = write(empty("1.7"), "propose_loops", { loops: [spec("Pay the rent")] });
+  s = write(s, "approve_loops", { codes: ["P-HOM-01"] }, page);
+  assert.throws(() => write(s, "set_meta", { languages: ["en", "es"], about: { en: "I want my evenings back!", es: "Quiero recuperar mis noches." } }), /exclamation/);
+  s = write(s, "set_meta", { languages: ["en", "es"] });
+  assert.deepEqual(s.meta.languages, ["en", "es"]);
+  assert.equal(lastResult.missingCount, 1);
+  assert.deepEqual(lastResult.missingTranslations[0], {
+    target: "P-HOM-01",
+    missing: { name: ["es"], doneWhen: ["es"] },
+    text: { name: { en: "Pay the rent" }, doneWhen: { en: "The result is visible outside my head" } },
+  });
+});
+
+test("add_translations fills an empty language live, never rewrites one, and checks the Spanish rules", () => {
+  let s = write(empty("1.7"), "propose_loops", { loops: [spec("Pay the rent")] });
+  s = write(s, "approve_loops", { codes: ["P-HOM-01"] }, page);
+  s = write(s, "set_meta", { languages: ["en", "es"] });
+  const helper = { ...agent, access: "agent" };
+  assert.throws(() => write(s, "add_translations", { items: [{ target: "P-HOM-01", fields: { name: { es: "Decidir cuándo pagar la renta" } } }] }, helper), /failing verb \(decidir\)/);
+  assert.throws(() => write(s, "add_translations", { items: [{ target: "P-HOM-01", fields: { name: { fr: "Payer le loyer" } } }] }, helper), /fr is not a language of the log/);
+  s = write(s, "add_translations", { items: [{ target: "P-HOM-01", fields: { name: { es: "Pagar la renta" }, doneWhen: { es: "El resultado se ve fuera de mi cabeza" } } }] }, helper);
+  assert.deepEqual(s.loops[0].name, { en: "Pay the rent", es: "Pagar la renta" });
+  assert.equal(pendingItems(s).length, 0);
+  assert.equal(lastResult.missingCount, 0);
+  assert.deepEqual(validate(s), []);
+  assert.throws(() => write(s, "add_translations", { items: [{ target: "P-HOM-01", fields: { name: { es: "Pagar el alquiler" } } }] }, helper), /already has es.*rename_loop/);
+});
+
+test("add_translations fills the pending version when one waits, so both languages are approved together", () => {
+  let s = write(empty("1.7"), "propose_loops", { loops: [spec("Pay the rent")] });
+  s = write(s, "approve_loops", { codes: ["P-HOM-01"] }, page);
+  s = write(s, "rename_loop", { code: "P-HOM-01", name: { en: "Pay rent and utilities" } });
+  s = write(s, "set_meta", { languages: ["en", "es"] });
+  s = write(s, "add_translations", { items: [{ target: "P-HOM-01", fields: { name: { es: "Pagar la renta y los servicios" } } }] });
+  assert.deepEqual(s.loops[0].pending.name, { en: "Pay rent and utilities", es: "Pagar la renta y los servicios" });
+  assert.equal(s.loops[0].name.es, undefined);
+  s = write(s, "approve_text", { targets: ["P-HOM-01"] }, page);
+  assert.deepEqual(s.loops[0].name, { en: "Pay rent and utilities", es: "Pagar la renta y los servicios" });
 });

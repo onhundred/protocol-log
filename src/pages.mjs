@@ -11,14 +11,16 @@ import {
   derive,
   esc,
   estimateCanStart,
+  isFallback,
   isHardEligible,
   isMeasured,
   levelName,
+  listSize,
   logVersion,
   parseCode,
   pendingRuleBreaks,
   pickText,
-  progressNote,
+  progressStep,
   protocol as P,
   publicActivity,
   publicView,
@@ -28,35 +30,48 @@ import {
   validate,
 } from "../lib/protocol.mjs";
 import { VIEW_HOURS } from "./auth.mjs";
+import { UI_LANGUAGES, ruleText, t } from "./i18n.mjs";
 import { pendingItems } from "./ops.mjs";
 import { PROMPTS } from "./mcp.mjs";
 
-const LEVEL_NAME = { empty: "EMPTY", ...Object.fromEntries(LEVELS.map((l) => [l, levelName(l).toUpperCase()])) };
-const LEVEL_NOTES = {
-  empty: "no loop here yet",
-  still: "you decide and act. Filled squares are measured",
-  assisted: "the agent advises, you act",
-  delegated: "the agent acts, you approve",
-  autonomous: "the agent acts, you review",
-};
-const AREAS = { relationships: "RELATIONSHIPS", personal: "PERSONAL", company: "COMPANY" };
-const STATUS = {
-  registered: "NOT STARTED",
-  running: "TRYING",
-  holding: "PROVING",
-  reached: "LEVEL REACHED",
-  notAchieved: "DIDN'T PASS",
-  terminated: "STOPPED",
-  concluded: "ENDED",
-};
-const VERDICT = { confirmed: "BET RIGHT", refuted: "BET WRONG", unclear: "NOT CLEAR" };
-const TIP = {
-  levels: LEVEL_NAME,
-  measured: "MEASURED",
-  flags: { measuring: "MEASURING", experimenting: "TRYING", holding: "PROVING" },
-  outcomes: { achieved: "Last round passed", notAchieved: "Last round didn't pass", terminated: "Last round stopped", dropped: "Dropped a level" },
-  open: "TAP AGAIN TO OPEN",
-};
+// The language of the page being drawn. Pages render synchronously from start to end, so it can live here:
+// every exported page sets it first with usePage(), and no other page renders in between.
+let LANG = "en";
+let MAIN = "en";
+let TAGS = false;
+function usePage(meta, lang, { tags = false } = {}) {
+  const langs = meta?.languages?.length ? meta.languages : UI_LANGUAGES;
+  MAIN = meta?.languages?.[0] || "en";
+  LANG = langs.includes(lang) ? lang : MAIN;
+  TAGS = tags;
+}
+const w = (key, ...args) => t(LANG, key, ...args);
+const txt = (value) => pickText(value, LANG, MAIN);
+const langName = (l) => w("languageNames")[l] || l.toUpperCase();
+
+// Escaped text in the page's language. On the owner's pages, text not written in it yet carries the code of the language it shows in.
+function shown(value) {
+  const out = esc(txt(value));
+  if (!TAGS || !isFallback(value, LANG)) return out;
+  const from = [MAIN, ...Object.keys(value)].find((l) => typeof value[l] === "string" && value[l].trim());
+  return `${out} <span class="lang-tag" title="${esc(w("untranslated", langName(LANG)))}">${esc(from.toUpperCase())}</span>`;
+}
+
+const lvName = (l) => levelName(l, LANG);
+const levelLabel = (l) => (l === "empty" ? w("levels.empty") : lvName(l).toUpperCase());
+const levelNote = (l) => w(`levels.notes.${l}`);
+const branchName = (b) => w("branches")[b] || P.branches[b]?.name || b;
+const areaLabel = (areaCode) => w("areas")[areaCode] || P.branches[areaCode[0]]?.areas[areaCode.slice(2)] || areaCode;
+// A rule a text breaks, without its "TARGET: " prefix.
+const ruleWords = (v) => ruleText(LANG, v.message.slice(v.target.length + 2));
+const gridTip = () => ({
+  levels: Object.fromEntries(["empty", ...LEVELS].map((l) => [l, levelLabel(l)])),
+  measured: w("grid.measured"),
+  flags: w("grid.flags"),
+  outcomes: w("grid.outcomes"),
+  open: w("grid.open"),
+  areaWords: w("grid.areaWords"),
+});
 
 const CSP_BASE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'";
 
@@ -72,20 +87,34 @@ export function html(body, { status = 200, headers = {}, cache = "no-store", for
 
 const CREDIT = P.attribution;
 
+// The version the log runs, not the one in this code. Until the next check-in after an adoption, it opens the change note.
+// A <details> can't sit inside a link, so then only the wordmark links home.
+function brand(meta) {
+  const mark = `<img src="/wordmark.svg" alt="Onhundred" width="68" height="9">`;
+  const tag = w("protocol.tag", esc(logVersion(meta)));
+  const who = meta?.ownerName ? ` · ${esc(meta.ownerName.toUpperCase())}` : "";
+  const change = meta?.protocolChange;
+  if (!changeIsCurrent(change, new Date().toISOString().slice(0, 10))) return `<a class="brand" href="/">${mark}<span>${tag}${who}</span></a>`;
+  return `<div class="brand"><a href="/">${mark}</a><span><details class="note term version-note" data-menu><summary>${tag}</summary><span class="note-pop" role="note">${esc(changeNote(change))}</span></details>${who}</span></div>`;
+}
+
 // signedIn without owner: the owner previewing the visitor's page. The body is the visitor's; the nav still knows who's here.
 // ogImage, ogTitle and ogDescription replace the link preview: a shared card swaps in its own image and headline.
-function layout({ title, ownerName, version = P.version, owner = false, signedIn = owner, body, current = "", origin = "", description: about = "", ogImage = "", ogTitle = "", ogDescription = "" }) {
+// url: the page's address, so the language switch keeps the rest of it.
+function layout({ title, meta, owner = false, signedIn = owner, body, current = "", origin = "", url = null, description: about = "", ogImage = "", ogTitle = "", ogDescription = "" }) {
+  const ownerName = meta?.ownerName;
   const link = (href, label) => `<a href="${href}"${current === href ? ' aria-current="page"' : ""}>${label}</a>`;
-  const description = about || `${ownerName ? `${ownerName}'s log` : "A log"} that follows the ${CREDIT.text}.`;
+  const description = about || w("site.description", ownerName, CREDIT.text);
   const image = ogImage || `${origin}/og.png`;
-  const signOut = `<form method="post" action="/logout"><button type="submit" class="linkish">SIGN OUT</button></form>`;
+  const signOut = `<form method="post" action="/logout"><button type="submit" class="linkish">${w("nav.signOut")}</button></form>`;
+  const langs = langSwitch(meta, url);
   const nav = owner
-    ? `<nav class="nav">${link("/", "LOG")}${link("/connections", "CONNECTIONS")}<a href="/export" data-export-open>EXPORT</a>${signOut}</nav>`
+    ? `<nav class="nav">${langs}${link("/", w("nav.log"))}${link("/connections", w("nav.connections"))}<a href="/export" data-export-open>${w("nav.export")}</a>${signOut}</nav>`
     : signedIn
-      ? `<nav class="nav"><a href="/">BACK TO YOUR LOG</a>${signOut}</nav>`
-      : `<nav class="nav"><a href="/login">SIGN IN</a></nav>`;
+      ? `<nav class="nav">${langs}<a href="/">${w("nav.back")}</a>${signOut}</nav>`
+      : `<nav class="nav">${langs}<a href="/login">${w("nav.signIn")}</a></nav>`;
   return `<!doctype html>
-<html lang="en" class="dark">
+<html lang="${esc(LANG)}" class="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -108,35 +137,50 @@ function layout({ title, ownerName, version = P.version, owner = false, signedIn
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
-<body>
+<body data-words="${esc(JSON.stringify(w("app")))}">
 <header class="top">
-<a class="brand" href="/"><img src="/wordmark.svg" alt="Onhundred" width="68" height="9"><span>PROTOCOL v${esc(version)}${ownerName ? ` · ${esc(ownerName.toUpperCase())}` : ""}</span></a>
+${brand(meta)}
 ${nav}
 </header>
 <main>
 ${body}
 </main>
 ${owner ? exportDialog() : ""}
-<footer class="foot"><a class="foot-mark" href="${esc(CREDIT.url)}" rel="noopener" aria-label="Onhundred"><img src="/on100.svg" alt="" width="32" height="32"></a><span>Follows the <a href="${esc(CREDIT.url)}" rel="noopener">${esc(CREDIT.text)}</a> and <a href="https://4geeks.com" rel="noopener">4Geeks.com</a>. v${esc(P.version)}.${owner ? " Your data lives in your Cloudflare account." : ""}</span></footer>
+<footer class="foot"><a class="foot-mark" href="${esc(CREDIT.url)}" rel="noopener" aria-label="Onhundred"><img src="/on100.svg" alt="" width="32" height="32"></a><span>${w("site.follows", `<a href="${esc(CREDIT.url)}" rel="noopener">${esc(CREDIT.text)}</a>`, `<a href="https://4geeks.com" rel="noopener">4Geeks.com</a>`, esc(P.version))}${owner ? w("site.dataLives") : ""}</span></footer>
 </body>
 </html>`;
+}
+
+// ES | EN, only on a log with more than one language. Each link keeps the page and its query, minus one-time notes.
+function langSwitch(meta, url) {
+  const langs = meta?.languages || [];
+  if (langs.length < 2) return "";
+  const href = (l) => {
+    const q = new URLSearchParams(url?.search || "");
+    for (const k of ["lang", "done", "error"]) q.delete(k);
+    q.set("lang", l);
+    return `?${q}`;
+  };
+  const items = langs.map((l) =>
+    l === LANG
+      ? `<span aria-current="true" lang="${esc(l)}">${esc(l.toUpperCase())}</span>`
+      : `<a href="${esc(href(l))}" lang="${esc(l)}" title="${esc(t(l, "languageNames")[l] || l)}">${esc(l.toUpperCase())}</a>`
+  );
+  return `<span class="lang-switch" role="group" aria-label="${esc(w("switchLabel"))}">${items.join("")}</span>`;
 }
 
 // The EXPORT link downloads directly without JavaScript; with it, this dialog explains the file first.
 const exportDialog = () => `<dialog class="modal" data-export-dialog aria-labelledby="export-title">
 <form method="get" action="/export">
-<h3 id="export-title">Download your log?</h3>
-<p class="modal-loop">You get 1 JSON file, onhundred-log-${new Date().toISOString().slice(0, 10)}.json, with a copy of your whole log as it is right now.</p>
-<p>It contains:</p>
+<h3 id="export-title">${w("exportDialog.title")}</h3>
+<p class="modal-loop">${w("exportDialog.file", `onhundred-log-${new Date().toISOString().slice(0, 10)}.json`)}</p>
+<p>${w("exportDialog.contains")}</p>
 <ul class="modal-list">
-<li>Your settings and the protocol version your log runs.</li>
-<li>Every loop, including proposed and retired ones.</li>
-<li>Every experiment, with all its stages and tries.</li>
-<li>The full history: every change, who made it, when, and what it changed.</li>
+${w("exportDialog.items").map((i) => `<li>${i}</li>`).join("\n")}
 </ul>
-<p>It includes private fields that never appear on your public page, like evidence, people involved and notes. Store it somewhere safe.</p>
-<p class="muted">It leaves out your password, API keys and connections. Downloading changes nothing in your log. A backup is also saved to your Cloudflare account every night.</p>
-<div class="actions"><button class="btn signal" type="submit">DOWNLOAD JSON</button><button class="btn" type="button" data-export-cancel>CANCEL</button></div>
+<p>${w("exportDialog.private")}</p>
+<p class="muted">${w("exportDialog.leaves")}</p>
+<div class="actions"><button class="btn signal" type="submit">${w("exportDialog.download")}</button><button class="btn" type="button" data-export-cancel>${w("common.cancel")}</button></div>
 </form>
 </dialog>`;
 
@@ -144,7 +188,7 @@ const notice = (text, kind = "") => `<p class="notice${kind ? " " + kind : ""}">
 
 // Saves confirm in a toast that leaves on its own; errors stay in the page until the person acts on them.
 const toast = (text) =>
-  `<div class="toast" role="status" aria-live="polite" data-toast>${CHECK_CIRCLE_ICON}<span>${text}</span><button class="notice-close" type="button" data-dismiss aria-label="Close">${CLOSE_ICON}</button></div>`;
+  `<div class="toast" role="status" aria-live="polite" data-toast>${CHECK_CIRCLE_ICON}<span>${text}</span><button class="notice-close" type="button" data-dismiss aria-label="${w("common.closeAria")}">${CLOSE_ICON}</button></div>`;
 
 function flash(url) {
   const done = url.searchParams.get("done");
@@ -161,42 +205,43 @@ function flash(url) {
 const changesSince = (from, to = P.version) =>
   Object.entries(P.changes || {})
     .filter(([v]) => compareVersions(v, from) > 0 && compareVersions(v, to) <= 0)
-    .map(([v, t]) => `v${v}: ${t.en}`)
+    .map(([v, words]) => `v${v}: ${words[LANG] || words.en}`)
     .join("; ");
 
 function protocolNotice(meta, upgrade) {
   const u = meta.protocolUpgrade;
   if (u)
-    return notice(
-      `You adopted protocol v${esc(u.version)}. It takes effect after check-in ${esc(u.fromCycle - 1)}. Until then the log runs v${esc(meta.protocolVersion)}.`
-    );
+    return notice(w("protocol.adoptedWaits", esc(u.version), esc(u.fromCycle - 1), esc(meta.protocolVersion)));
   if (!upgrade) return "";
   const running = meta.mode === "frozen" && meta.cycle >= 1;
-  const when = running ? `takes effect after check-in ${meta.cycle}` : "takes effect now, since check-ins haven't started";
+  const when = running ? w("protocol.afterCheckIn", meta.cycle) : w("protocol.now");
   const what = changesSince(meta.protocolVersion);
-  return `<form method="post" action="/owner/action" class="notice upgrade"><input type="hidden" name="op" value="adopt_protocol"><span>Protocol v${esc(P.version)} is in this code and your log runs v${esc(meta.protocolVersion)}${what ? ` (${esc(what)})` : ""}. Adopting it ${when}.</span><button class="btn signal small" type="submit">ADOPT v${esc(P.version)}</button></form>`;
+  return `<form method="post" action="/owner/action" class="notice upgrade"><input type="hidden" name="op" value="adopt_protocol"><span>${w("protocol.upgrade", esc(P.version), esc(meta.protocolVersion), esc(what), when)}</span><button class="btn signal small" type="submit">${w("protocol.adopt", esc(P.version))}</button></form>`;
 }
 
-const shortDate = (day) => new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const shortDate = (day) =>
+  new Date(`${day}T00:00:00Z`).toLocaleDateString(LANG === "en" ? "en-US" : LANG, { month: "short", day: "numeric", timeZone: "UTC" }).replace(".", "");
 
 // Until the next check-in after an adoption: what changed, and the handed-off figure under both versions with the same loops.
 export function changeNote(change) {
   const what = Object.entries(P.changes || {})
     .filter(([v]) => compareVersions(v, change.from) > 0 && compareVersions(v, change.to) <= 0)
-    .map(([, t]) => t.en)
+    .map(([, words]) => words[LANG] || words.en)
     .join("; ");
-  const head = `Adopted ${shortDate(change.at)}${what ? `: ${what}` : ""}.`;
+  const head = w("protocol.adoptedOn", shortDate(change.at), what);
   if (change.delegatedBefore === change.delegatedAfter) return head;
-  return `${head} Handed off went from ${change.delegatedBefore} to ${change.delegatedAfter} with no change in loops.`;
+  return head + w("protocol.handedOffMoved", change.delegatedBefore, change.delegatedAfter);
 }
 
 // Empty squares pad each branch toward its share of the 100, so the grid always shows what's left to fill.
 // A branch past its share takes squares from the others: the total never exceeds 100.
+// A list of 10 holds the loops that take the most hours, from any area, so its empty squares belong to none: null.
 const per = Math.floor(P.limits.loops / P.branchOrder.length);
 const SHARES = Object.fromEntries(
   P.branchOrder.map((b, i) => [b, i === P.branchOrder.length - 1 ? P.limits.loops - per * i : per])
 );
-function emptySlots(loops) {
+function emptySlots(loops, size = P.limits.loops) {
+  if (size < P.limits.loops) return null;
   let free = P.limits.loops - loops.length;
   return Object.fromEntries(
     P.branchOrder.map((b) => {
@@ -212,10 +257,12 @@ const drawGrid = (view, meta, opts = {}) =>
   renderGrid(
     { ...view, meta: { ...view.meta, grid: meta.grid } },
     {
-      lang: meta.languages[0],
+      lang: LANG,
+      main: MAIN,
       metric: "delegated",
-      labels: { areas: AREAS, private: "Private loop" },
-      slots: emptySlots(view.loops),
+      labels: { areas: w("grid.areas"), private: w("grid.private"), empty: w("grid.empty") },
+      slots: emptySlots(view.loops, listSize(meta)) || {},
+      size: listSize(meta),
       ...opts,
     }
   );
@@ -223,8 +270,8 @@ const drawGrid = (view, meta, opts = {}) =>
 // The check-in closes the last day of each 2-week period.
 function nextCheckIn(day) {
   const left = P.limits.cycleWeeks * 7 - (Number(day) || 1);
-  if (left <= 0) return "Today";
-  return left === 1 ? "Tomorrow" : `In ${left} days`;
+  if (left <= 0) return w("checkIn.today");
+  return left === 1 ? w("checkIn.tomorrow") : w("checkIn.inDays", left);
 }
 
 // Profile and share icons from Phosphor (MIT license), bold weight. Bluesky uses the butterfly.
@@ -255,16 +302,7 @@ const LINK_ICONS = {
 const linkIcon = (kind) => phosphor(LINK_ICONS[kind] || LINK_ICONS.website);
 
 // What a visitor's post says. Third person, because whoever shares it is rarely the owner.
-function shareText(meta, points) {
-  const who = meta.ownerName || "";
-  if (points > 0)
-    return who
-      ? `${who} has handed off ${points} of ${P.limits.loops} loops of life and work to AI agents. Every result is in the log.`
-      : `${points} of ${P.limits.loops} loops of life and work handed off to AI agents so far. Every result is in the log.`;
-  return who
-    ? `${who} is handing off ${P.limits.loops} loops of life and work to AI agents, one at a time. Every result is in the log.`
-    : `${P.limits.loops} loops of life and work, handed off to AI agents one at a time. Every result is in the log.`;
-}
+const shareText = (meta, points) => w("share.text", meta.ownerName || "", points, listSize(meta));
 
 const SHARE_TO = [
   { id: "x", name: "X", href: (t, u) => `https://x.com/intent/post?text=${t}&url=${u}` },
@@ -279,52 +317,31 @@ function shareMenu(meta, points, origin) {
   const u = encodeURIComponent(url);
   const items = SHARE_TO.map(
     (s) =>
-      `<a class="menu-item" href="${esc(s.href(t, u))}" target="_blank" rel="noopener" aria-label="Share on ${s.name} (opens in a new tab)">${linkIcon(s.id)}${s.name.toUpperCase()}</a>`
+      `<a class="menu-item" href="${esc(s.href(t, u))}" target="_blank" rel="noopener" aria-label="${esc(w("share.on", s.name))}">${linkIcon(s.id)}${s.name.toUpperCase()}</a>`
   ).join("");
-  return `<details class="menu share" data-menu><summary class="btn small signal">SHARE${CARET_ICON}</summary><div class="menu-list">${items}<input type="hidden" id="share-url" value="${esc(url)}"><button class="menu-item" type="button" data-copy="#share-url" aria-label="Copy the link to this log">${COPY_ICON}COPY LINK</button></div></details>`;
+  return `<details class="menu share" data-menu><summary class="btn small signal">${w("share.progress")}${CARET_ICON}</summary><div class="menu-list">${items}<input type="hidden" id="share-url" value="${esc(url)}"><button class="menu-item" type="button" data-copy="#share-url" aria-label="${esc(w("share.copyAria"))}">${COPY_ICON}${w("common.copyLink")}</button></div></details>`;
 }
 
-const profilePrompt = (meta) =>
-  `Use Onhundred to write the header of my public log. Read onhundred://docs/voice, then call get_state.${meta.ownerName ? "" : " Ask me the name to show and set ownerName."} Ask me why I run the protocol, and write it in 1 or 2 sentences, ${ABOUT_MAX_WORDS} words or fewer, in every language of the log. Ask me for up to ${MAX_LINKS} profile links: ${Object.values(PROFILE_LINKS).map((k) => k.name).join(", ")}. Show me the exact text and links before you call set_meta with about and links.`;
-
-const profileDialog = (meta) => `<dialog class="modal" data-dialog data-profile-dialog aria-labelledby="profile-title">
-<h3 id="profile-title">Edit your header with AI</h3>
-<p class="modal-loop">Your name, 1 line on why you run the protocol and your links show above your numbers on the public page. Edit the prompt if you like, then open it in your AI app.</p>
-<div class="copy block-code">${promptBox("profile-prompt", profilePrompt(meta), 7)}</div>
-<div class="actions"><button class="btn" type="button" data-dialog-close>CANCEL</button>${promptMenu("#profile-prompt", profilePrompt(meta), { up: true })}</div>
-</dialog>`;
-
-const LINK_HINTS = {
-  x: "@handle or x.com/handle",
-  linkedin: "linkedin.com/in/handle",
-  github: "@handle",
-  instagram: "@handle",
-  youtube: "@channel",
-  tiktok: "@handle",
-  threads: "@handle",
-  bluesky: "handle.bsky.social",
-  mastodon: "@you@instance.social",
-  website: "yoursite.com",
-};
+const kindName = (kind) => w("links.kinds")[kind] || PROFILE_LINKS[kind].name;
 
 // The page saves links itself: they need no wording, so no AI app is involved.
 const linksDialog = (meta) => {
   const current = Object.fromEntries((meta.links || []).map((l) => [l.kind, l.url]));
   const fields = Object.entries(PROFILE_LINKS)
     .map(
-      ([kind, k]) =>
-        `<label class="link-field"><span class="link-kind">${linkIcon(kind)}${esc(k.name.toUpperCase())}</span><input class="field" type="text" name="link_${kind}" value="${esc(current[kind] || "")}" placeholder="${esc(LINK_HINTS[kind])}" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"></label>`
+      ([kind]) =>
+        `<label class="link-field"><span class="link-kind">${linkIcon(kind)}${esc(kindName(kind).toUpperCase())}</span><input class="field" type="text" name="link_${kind}" value="${esc(current[kind] || "")}" placeholder="${esc(w("links.hints")[kind])}" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"></label>`
     )
     .join("");
   return `<dialog class="modal" data-dialog data-links-dialog aria-labelledby="links-title">
 <form method="post" action="/owner/action" data-quick-form>
 <input type="hidden" name="op" value="set_meta"><input type="hidden" name="setting" value="links">
-<h3 id="links-title">Your social accounts</h3>
-<p class="modal-loop">They show as FOLLOW buttons above your numbers on the public page. Paste a link or type a handle, up to ${MAX_LINKS}.</p>
+<h3 id="links-title">${w("links.title")}</h3>
+<p class="modal-loop">${w("links.intro", MAX_LINKS)}</p>
 <div class="link-fields">${fields}</div>
-<label class="modal-all"><input type="checkbox" name="none" value="1"${Array.isArray(meta.links) && !meta.links.length ? " checked" : ""}> <span>I don't use social media. Stop asking.</span></label>
+<label class="modal-all"><input type="checkbox" name="none" value="1"${Array.isArray(meta.links) && !meta.links.length ? " checked" : ""}> <span>${w("links.none")}</span></label>
 <p class="notice bad" data-form-error role="alert" hidden></p>
-<div class="actions"><button class="btn signal" type="submit">SAVE LINKS</button><button class="btn" type="button" data-dialog-close>CANCEL</button></div>
+<div class="actions"><button class="btn signal" type="submit">${w("links.save")}</button><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button></div>
 </form>
 </dialog>`;
 };
@@ -332,11 +349,11 @@ const linksDialog = (meta) => {
 const nameDialog = (meta) => `<dialog class="modal" data-dialog data-name-dialog aria-labelledby="name-title">
 <form method="post" action="/owner/action" data-quick-form>
 <input type="hidden" name="op" value="set_meta"><input type="hidden" name="setting" value="name">
-<h3 id="name-title">Your name</h3>
-<p class="modal-loop">It shows in large type above your numbers on the public page.</p>
+<h3 id="name-title">${w("nameDialog.title")}</h3>
+<p class="modal-loop">${w("nameDialog.intro")}</p>
 <input class="field" type="text" name="ownerName" value="${esc(meta.ownerName || "")}" maxlength="80" required autocomplete="name" aria-labelledby="name-title">
 <p class="notice bad" data-form-error role="alert" hidden></p>
-<div class="actions"><button class="btn signal" type="submit">SAVE</button><button class="btn" type="button" data-dialog-close>CANCEL</button></div>
+<div class="actions"><button class="btn signal" type="submit">${w("common.save")}</button><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button></div>
 </form>
 </dialog>`;
 
@@ -346,106 +363,101 @@ const aboutDialog = (meta) => {
   const fields = langs
     .map(
       (lang) =>
-        `<label class="about-field">${langs.length > 1 ? `<span class="label">${esc(lang.toUpperCase())}</span>` : ""}<textarea class="field" name="about_${esc(lang)}" rows="3" placeholder="I run the protocol to…">${esc(meta.about?.[lang] || "")}</textarea></label>`
+        `<label class="about-field">${langs.length > 1 ? `<span class="label">${esc(lang.toUpperCase())}</span>` : ""}<textarea class="field" name="about_${esc(lang)}" rows="3" placeholder="${esc(w("aboutDialog.placeholder"))}">${esc(meta.about?.[lang] || "")}</textarea></label>`
     )
     .join("");
   return `<dialog class="modal" data-dialog data-about-dialog aria-labelledby="about-title">
 <form method="post" action="/owner/action" data-quick-form>
 <input type="hidden" name="op" value="set_meta"><input type="hidden" name="setting" value="about">
-<h3 id="about-title">Why you run the protocol</h3>
-<p class="modal-loop">1 or 2 sentences under your name on the public page, ${ABOUT_MAX_WORDS} words or fewer${langs.length > 1 ? ", in every language of the log" : ""}. Leave it empty to remove it.</p>
+<h3 id="about-title">${w("aboutDialog.title")}</h3>
+<p class="modal-loop">${w("aboutDialog.intro", ABOUT_MAX_WORDS, langs.length > 1)}</p>
 <div class="about-fields">${fields}</div>
 <p class="notice bad" data-form-error role="alert" hidden></p>
-<div class="actions"><button class="btn signal" type="submit">SAVE</button><button class="btn" type="button" data-dialog-close>CANCEL</button></div>
+<div class="actions"><button class="btn signal" type="submit">${w("common.save")}</button><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button></div>
 </form>
 </dialog>`;
 };
 
 // Until the owner adds links or says they have none, every visit to the log page asks.
 function linksNotice(published) {
-  const text = published
-    ? "Visitors can't follow you yet. Add your social accounts so they show above your numbers."
-    : "Add your social accounts. Visitors see them above your numbers once you publish.";
-  return `<div class="notice upgrade links-ask"><span>${text}</span><button class="btn signal small" type="button" data-open-dialog="[data-links-dialog]">ADD YOUR LINKS</button></div>`;
+  const text = w(published ? "links.askPublished" : "links.askPrivate");
+  return `<div class="notice upgrade links-ask"><span>${text}</span><button class="btn signal small" type="button" data-open-dialog="[data-links-dialog]">${w("links.add")}</button></div>`;
 }
 
 // Who runs this log, why, and where to follow them: the first thing a visitor reads.
-// The owner sees the same header, plus SHARE once published, a links button, and an AI button for the rest.
-function profileHead(meta, points, { owner, connected, published, origin }) {
-  const lang = meta.languages[0];
-  const about = pickText(meta.about, lang);
+// The owner sees the same header, plus SHARE once published and a links button.
+function profileHead(meta, points, { owner, published, origin }) {
+  const about = txt(meta.about);
   const links = (meta.links || []).filter((l) => PROFILE_LINKS[l.kind]);
-  const edit = owner && connected;
   const share = owner && published;
   if (!meta.ownerName && !about && !links.length && !owner) return "";
-  const name = meta.ownerName || (owner ? "Your name" : "");
-  const follow = links.length
-    ? `<div class="profile-follow"><span class="label" id="follow-label">FOLLOW${meta.ownerName ? ` ${esc(meta.ownerName.split(/\s+/)[0].toUpperCase())}` : ""}</span><ul class="profile-links" aria-labelledby="follow-label">${links
-        .map((l) => {
-          const label = `${meta.ownerName ? `${meta.ownerName} on ` : ""}${PROFILE_LINKS[l.kind].name} (opens in a new tab)`;
-          return `<li><a href="${esc(l.url)}" target="_blank" rel="me noopener" aria-label="${esc(label)}" title="${esc(PROFILE_LINKS[l.kind].name)}">${linkIcon(l.kind)}</a></li>`;
-        })
-        .join("")}</ul></div>`
-    : "";
-  const textMissing = !meta.ownerName || !about;
+  const name = meta.ownerName || (owner ? w("profile.yourName") : "");
   const pencil = (dialog, label) =>
     owner ? ` <button class="pencil" type="button" data-open-dialog="[${dialog}]" aria-label="${label}" title="${label}">${PENCIL_ICON}</button>` : "";
+  const follow = links.length
+    ? `<div class="profile-follow"><span class="label" id="follow-label">${w("profile.follow", meta.ownerName ? esc(meta.ownerName.split(/\s+/)[0].toUpperCase()) : "")}</span><ul class="profile-links" aria-labelledby="follow-label">${links
+        .map((l) => {
+          const label = w("profile.followAria", meta.ownerName || "", kindName(l.kind));
+          return `<li><a href="${esc(l.url)}" target="_blank" rel="me noopener" aria-label="${esc(label)}" title="${esc(kindName(l.kind))}">${linkIcon(l.kind)}</a></li>`;
+        })
+        .join("")}</ul>${pencil("data-links-dialog", w("profile.editLinks"))}</div>`
+    : "";
   // The pencil wraps with the last word, never alone on its own line.
-  const withPencil = (text, btn) => {
-    if (!btn) return esc(text);
+  // tag: the language code shown after text that isn't written in the page's language yet.
+  const withPencil = (text, btn, tag = "") => {
+    if (!btn) return esc(text) + tag;
     const at = text.lastIndexOf(" ") + 1;
-    return `${esc(text.slice(0, at))}<span class="nowrap">${esc(text.slice(at))}${btn}</span>`;
+    return `${esc(text.slice(0, at))}<span class="nowrap">${esc(text.slice(at))}${tag}${btn}</span>`;
   };
-  const aboutPencil = pencil("data-about-dialog", about ? "Edit why you run the protocol" : "Write why you run the protocol");
+  const aboutPencil = pencil("data-about-dialog", w(about ? "profile.editAbout" : "profile.writeAbout"));
+  const aboutTag = owner && meta.about ? shown(meta.about).slice(esc(about).length) : "";
   const aboutLine = about
-    ? `<p class="profile-about">${withPencil(about, aboutPencil)}</p>`
+    ? `<p class="profile-about">${withPencil(about, aboutPencil, aboutTag)}</p>`
     : owner
-      ? `<p class="profile-about empty">${withPencil("Add 1 line on why you run the protocol, so visitors know what this log is for.", aboutPencil)}</p>`
+      ? `<p class="profile-about empty">${withPencil(w("profile.aboutEmpty"), aboutPencil)}</p>`
       : "";
   const nameLine = name
-    ? `<h1 class="profile-name${meta.ownerName ? "" : " empty"}">${withPencil(name, pencil("data-name-dialog", meta.ownerName ? "Edit your name" : "Add your name"))}</h1>`
+    ? `<h1 class="profile-name${meta.ownerName ? "" : " empty"}">${withPencil(name, pencil("data-name-dialog", w(meta.ownerName ? "profile.editName" : "profile.addName")))}</h1>`
     : "";
-  const linksBtn = owner
-    ? `<button class="btn small" type="button" data-open-dialog="[data-links-dialog]">${links.length ? "EDIT LINKS" : "ADD LINKS"}</button>`
+  const addLinks = owner && !links.length
+    ? `<button class="btn small" type="button" data-open-dialog="[data-links-dialog]">${w("profile.addLinks")}</button>`
     : "";
-  const editBtn = edit
-    ? `<button class="btn small" type="button" data-open-dialog="[data-profile-dialog]">${textMissing ? "ADD WITH AI" : "EDIT WITH AI"}</button>`
-    : "";
-  const actions = follow + (share ? shareMenu(meta, points, origin) : "") + linksBtn + editBtn;
+  const actions = follow + addLinks + (share ? shareMenu(meta, points, origin) : "");
   return `<section class="profile">
 <div class="profile-id">${nameLine}${aboutLine}</div>
 ${actions ? `<div class="profile-actions">${actions}</div>` : ""}
-</section>${edit ? profileDialog(meta) : ""}${owner ? linksDialog(meta) + aboutDialog(meta) + nameDialog(meta) : ""}`;
+</section>${owner ? linksDialog(meta) + aboutDialog(meta) + nameDialog(meta) : ""}`;
 }
 
 // The figure leads; everything else is a labelled status row beside it (below it on phones).
 // The owner's small grid at the end of the row only shows on wide screens, where it opens the full one (the next section).
 // Visitors get the full grid open instead.
-function readout(view, meta, owner, headed = false) {
+function readout(view, meta, owner, headed = false, proposals = 0) {
   const m = view.metrics;
   const approved = view.loops.length;
+  const size = listSize(meta);
   const row = (label, value, note = "") =>
     `<div><dt>${label}</dt><dd>${value}${note ? noteButton(note) : ""}</dd></div>`;
   const rows = [
     meta.cycle
-      ? row(`CHECK-IN ${esc(meta.cycle)}`, nextCheckIn(meta.day))
-      : row("CHECK-INS", "Not started", "They start when your list is frozen."),
+      ? row(w("readout.checkIn", esc(meta.cycle)), nextCheckIn(meta.day))
+      : row(w("readout.checkIns"), w("readout.notStarted"), w("readout.startsWhenFrozen")),
     row(
-      "YOUR LIST",
-      meta.mode === "frozen" ? `v${esc(meta.inventoryVersion || 1)} · ${approved} loops` : `${approved} of ${P.limits.loops} approved`,
-      meta.mode === "frozen" ? "Frozen: a new loop needs a merge or a retirement." : ""
+      w("readout.yourList"),
+      meta.mode === "frozen" ? w("readout.frozen", esc(meta.inventoryVersion || 1), approved) : w("readout.approvedOf", approved, size),
+      meta.mode === "frozen" ? w("readout.frozenNote") : ""
     ),
   ];
-  if (meta.stillMetric) rows.push(row(`STILL ${meta.ownerName ? "THEM" : "YOU"}`, `${m.stillPct}%`));
-  const change = meta.protocolChange;
-  const current = changeIsCurrent(change, new Date().toISOString().slice(0, 10));
-  rows.push(row("PROTOCOL", `v${esc(meta.protocolVersion)}`, current ? esc(changeNote(change)) : ""));
+  if (meta.stillMetric) rows.push(row(w("readout.still", Boolean(meta.ownerName)), `${m.stillPct}%`));
   const mini = owner ? drawGrid(view, meta, { compact: true }) : null;
-  const progress = progressNote(view);
+  const step = progressStep(view);
+  const progress = step ? w(`progress.${step.step}`, step.n) : "";
+  const review = proposals ? w("readout.review", proposals) : "";
+  const note = [progress ? esc(progress) : "", review].filter(Boolean).join(" ");
   return `<section class="readout">
-<div class="readout-main"><${headed ? "p" : "h1"} class="figure"><span class="pct" data-assisted-weight="${assistedWeight(m.version || P.version)}">${m.delegatedPoints}</span><span class="cap">OF ${P.limits.loops}<br>HANDED OFF</span></${headed ? "p" : "h1"}>${progress ? `<p class="figure-note">${esc(progress)}</p>` : ""}${owner ? `<a class="btn small" href="/?view=public" target="_blank" rel="noopener" aria-label="Check your public dashboard (opens in a new tab)">CHECK YOUR PUBLIC DASHBOARD${NEW_TAB_ICON}</a>` : ""}</div>
+<div class="readout-main"><${headed ? "p" : "h1"} class="figure"><span class="pct" data-assisted-weight="${assistedWeight(m.version || P.version)}">${m.delegatedPoints}</span><span class="cap">${w("readout.cap", size)}</span></${headed ? "p" : "h1"}>${note ? `<p class="figure-note">${note}</p>` : ""}${owner ? `<a class="btn small" href="/?view=public" target="_blank" rel="noopener" aria-label="${esc(w("readout.checkPublicAria"))}">${w("readout.checkPublic")}${NEW_TAB_ICON}</a>` : ""}</div>
 <dl class="status">${rows.join("")}</dl>
-${mini ? `<a class="grid mini" href="#activity" role="button" aria-expanded="false" aria-controls="activity" data-grid-toggle style="grid-template-columns:${mini.columns}" aria-label="Show the full delegation grid">${mini.html}</a>` : ""}
+${mini ? `<div class="mini-wrap"><p class="mini-label">${w("readout.miniLabel")}</p><a class="grid mini"${size < P.limits.loops ? ` data-size="${size}"` : ""} href="#activity" role="button" aria-expanded="false" aria-controls="activity" data-grid-toggle style="grid-template-columns:${mini.columns}" aria-label="${esc(w("readout.miniAria"))}">${mini.html}</a></div>` : ""}
 </section>`;
 }
 
@@ -517,10 +529,14 @@ const KEY_ICON = phosphor(
 const sectionTitle = (icon, text) => `<h2 class="title">${icon}<span>${text}</span></h2>`;
 
 // data-menu gives it the prompt menus' closing: a click outside or Escape.
-const noteButton = (text, label = "More about this") =>
+const noteButton = (text, label = w("common.moreAbout")) =>
   `<details class="note" data-menu><summary aria-label="${label}">${INFO_ICON}</summary><div class="note-pop" role="note">${text}</div></details>`;
 
-const FIRST_PROMPT = "Use Onhundred to help me build my 100 loops.";
+// A highlighted word in running text that opens its definition. Its container can't be a <p>.
+const termNote = (word, text) =>
+  `<details class="note term" data-menu><summary>${word}</summary><span class="note-pop" role="note">${text}</span></details>`;
+
+const firstPrompt = (size) => w("start.firstPrompt", size);
 
 // Prefill links each app opens a new chat with. None is a documented API, so COPY stays.
 const OPEN_IN = [
@@ -543,64 +559,139 @@ const COPY_ICON = phosphor(
 const promptMenu = (source, prompt, { up = false } = {}) => {
   const apps = OPEN_IN.map(
     (a) =>
-      `<a class="menu-item" href="${esc(prompt == null ? "#" : a.href(encodeURIComponent(prompt)))}" data-app-href="${esc(a.href("{q}"))}" target="_blank" rel="noopener" aria-label="Open the prompt in ${a.name}">${APP_ICONS[a.id]}${a.name.toUpperCase()}</a>`
+      `<a class="menu-item" href="${esc(prompt == null ? "#" : a.href(encodeURIComponent(prompt)))}" data-app-href="${esc(a.href("{q}"))}" target="_blank" rel="noopener" aria-label="${esc(w("common.openIn", a.name))}">${APP_ICONS[a.id]}${a.name.toUpperCase()}</a>`
   ).join("");
-  return `<details class="menu${up ? " up" : ""}" data-menu data-prompt-source="${source}"><summary class="btn signal">USE PROMPT${CARET_ICON}</summary><div class="menu-list">${apps}<button class="menu-item" type="button" data-copy="${source}" aria-label="Copy the prompt">${COPY_ICON}COPY</button></div></details>`;
+  return `<details class="menu${up ? " up" : ""}" data-menu data-prompt-source="${source}"><summary class="btn signal">${w("common.usePrompt")}${CARET_ICON}</summary><div class="menu-list">${apps}<button class="menu-item" type="button" data-copy="${source}" aria-label="${esc(w("common.copyPrompt"))}">${COPY_ICON}${w("common.copy")}</button></div></details>`;
 };
 
 // Every prompt is editable before it goes to the agent.
 const promptBox = (id, text = "", rows = 6) =>
-  `<textarea class="prompt-box" id="${id}" rows="${rows}" spellcheck="false" aria-label="Prompt. Edit it before you send it.">${esc(text)}</textarea>`;
+  `<textarea class="prompt-box" id="${id}" rows="${rows}" spellcheck="false" aria-label="${esc(w("common.promptAria"))}">${esc(text)}</textarea>`;
 
-function emptyState(owner, connected) {
-  if (!owner) return `<section class="block empty-state"><h2>No loops yet</h2><p>The list is still being made.</p></section>`;
+function emptyState(owner, connected, size) {
+  if (!owner) return `<section class="block empty-state"><h2>${w("start.noLoops")}</h2><p>${w("start.beingMade")}</p></section>`;
   if (!connected) {
     return `<section class="block empty-state">
-<h2>No loops yet</h2>
-<p>Your AI app proposes them and you approve each one here.</p>
-<aside class="help-box"><span class="help-icon">${HELP_ICON}</span><div><p>Connect an AI app to your log to start.</p><a class="btn signal" href="/connect">CONNECT YOUR AI</a></div></aside>
+<h2>${w("start.noLoops")}</h2>
+<p>${w("start.aiProposes")}</p>
+<aside class="help-box"><span class="help-icon">${HELP_ICON}</span><div><p>${w("start.connectToStart")}</p><a class="btn signal" href="/connect">${w("common.connectAi")}</a></div></aside>
 </section>`;
   }
   return `<section class="block empty-state">
-<h2>No loops yet</h2>
-<p>Your AI app proposes them and you approve each one here. Start with this prompt, and edit it first if you like:</p>
-<div class="copy">${promptBox("first-prompt", FIRST_PROMPT, 2)}${promptMenu("#first-prompt", FIRST_PROMPT)}</div>
+<h2>${w("start.noLoops")}</h2>
+<p>${w("start.startWith")}</p>
+<div class="copy">${promptBox("first-prompt", firstPrompt(size), 2)}${promptMenu("#first-prompt", firstPrompt(size))}</div>
 </section>`;
 }
 
+// free: empty squares by branch, or null on a list of 10, where they belong to no area.
+const fillSlotsPrompt = (free, total, size) => {
+  const read = w("fill.read");
+  const ask = w("fill.ask");
+  if (!free) return w("fill.promptList", total, size, read, ask);
+  const parts = P.branchOrder.filter((b) => free[b]).map((b) => w("fill.inArea", free[b], branchName(b)));
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")}${w("fill.and")}${parts.at(-1)}` : parts[0];
+  return w("fill.promptAreas", total, list, read, ask);
+};
+
+const fillSlotsDialog = (free, total, size) => {
+  const prompt = fillSlotsPrompt(free, total, size);
+  return `<dialog class="modal" data-dialog id="fill-slots-dialog" aria-labelledby="fill-slots-title">
+<h3 id="fill-slots-title">${w("fill.title")}</h3>
+<p class="modal-loop">${w("fill.intro", total)}</p>
+<ol class="modal-list">
+${[w(free ? "fill.stepAreas" : "fill.stepHours"), ...w("fill.steps")].map((s) => `<li>${s}</li>`).join("\n")}
+</ol>
+<details class="prompt-peek"><summary class="link-btn">${w("common.seePrompt")}</summary><p class="modal-loop">${w("fill.peek")}</p><div class="copy block-code">${promptBox("fill-slots-prompt", prompt, 8)}</div></details>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button>${promptMenu("#fill-slots-prompt", prompt, { up: true })}</div>
+</dialog>`;
+};
+
+// One dialog for every empty square.
+function emptySlotDialog(connected, byArea = true) {
+  const steps = w(connected ? "fill.connectedSteps" : "fill.unconnectedSteps", byArea);
+  const action = connected
+    ? `<button class="btn fix-btn" type="button" data-dialog-close data-open-dialog="#fill-slots-dialog">${HELP_ICON}${w("common.getHelp")}</button><button class="btn signal fix-btn" type="button" data-dialog-close data-open-dialog="#fill-one-dialog">${ROBOT_ICON}${w("fill.fillThis")}</button>`
+    : `<a class="btn signal" href="/connect">${w("common.connectAi")}</a>`;
+  return `<dialog class="modal" data-dialog data-empty-dialog aria-labelledby="empty-title">
+<h3 id="empty-title">${w("fill.emptyTitle")}</h3>
+<p class="modal-loop">${w("fill.emptyIntro")}</p>
+<p>${w("fill.howTo")}</p>
+<ol class="modal-list">${steps.map((s) => `<li>${s}</li>`).join("")}</ol>
+<div class="actions"><button class="btn fix-btn" type="button" data-dialog-close>${CLOSE_ICON}${w("common.close")}</button>${action}</div>
+</dialog>`;
+}
+
+// FILL THIS LOOP: the person names 1 task, and app.js writes it into the prompt with the clicked square's area.
+// On a list of 10 the squares have no area, so the prompt names the list instead.
+const fillOnePrompt = (size) => (size < P.limits.loops ? w("fill.onePromptList", size) : w("fill.onePromptArea"));
+const fillOneDialog = (size) => {
+  const areas = Object.fromEntries(P.branchOrder.map((b) => [P.branches[b].key, branchName(b)]));
+  return `<dialog class="modal" data-dialog id="fill-one-dialog" data-fill-one data-template="${esc(fillOnePrompt(size))}" data-areas="${esc(JSON.stringify(areas))}" aria-labelledby="fill-one-title">
+<h3 id="fill-one-title">${w("fill.oneTitle")}</h3>
+<p class="modal-loop">${w("fill.oneIntro")}</p>
+<input class="field" type="text" id="fill-one-answer" maxlength="200" placeholder="${esc(w("fill.onePlaceholder"))}" autocomplete="off" aria-labelledby="fill-one-title">
+<details class="prompt-peek"><summary class="link-btn">${w("common.seePrompt")}</summary><div class="copy block-code">${promptBox("fill-one-prompt", "", 4)}</div></details>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button>${promptMenu("#fill-one-prompt", null, { up: true })}</div>
+</dialog>`;
+};
+
 function gridSection(view, meta, owner, connected, hasProposals) {
+  const size = listSize(meta);
   const { html: cells, columns } = drawGrid(view, meta);
-  const slots = Object.values(emptySlots(view.loops)).reduce((a, n) => a + n, 0);
-  const counts = { empty: slots - view.loops.length, ...view.metrics?.counts };
+  const slots = emptySlots(view.loops, size);
+  const free = slots && Object.fromEntries(P.branchOrder.map((b) => [b, slots[b] - view.loops.filter((l) => l.code.startsWith(b + "-")).length]));
+  const empty = free ? Object.values(free).reduce((a, n) => a + n, 0) : Math.max(0, size - view.loops.length);
+  const counts = { empty, ...view.metrics?.counts };
+  const helpEmpty = owner && counts.empty > 0;
+  const help = !helpEmpty
+    ? ""
+    : connected
+      ? `<button class="link-btn legend-help" type="button" data-open-dialog="#fill-slots-dialog">${ROBOT_ICON}${w("common.getHelp")}</button>`
+      : `<a class="btn small legend-help" href="/connect">${w("common.connectAi")}</a>`;
+  const note = (l) => (l === "empty" && helpEmpty ? w("grid.pickHere") : levelNote(l));
   const legend = ["empty", ...LEVELS]
     .map(
       (l) =>
-        `<li data-level="${l}"><i class="cell" data-s="${l}"></i><span class="lv">${LEVEL_NAME[l]}<small>${esc(LEVEL_NOTES[l])}</small></span><span class="n">${counts[l] || 0}</span></li>`
+        `<li data-level="${l}"><i class="cell" data-s="${l}"></i><span class="lv">${levelLabel(l)}<small>${esc(note(l))}</small>${l === "empty" ? help : ""}</span><span class="n">${counts[l] || 0}</span></li>`
     )
     .join("");
-  const grid = view.loops.length
-    ? `<div class="grid" data-grid data-tip="${esc(JSON.stringify(TIP))}" style="grid-template-columns:${columns}" role="img" aria-label="Delegation grid: each square is 1 loop">${cells}</div>`
-    : `<div class="grid" data-grid style="grid-template-columns:${columns}" role="img" aria-label="Delegation grid: no loops yet">${cells}</div>`;
+  const tip = esc(JSON.stringify({ ...gridTip(), empty: w("grid.emptyTip", Boolean(free), owner) }));
+  // A list of 10 shows each loop's name on its tile, so it's a list screen readers can read, not a picture.
+  const label = esc(w("grid.aria", w("grid.label", view.loops.length, Boolean(free))));
+  const grid = free
+    ? `<div class="grid" data-grid data-tip="${tip}" style="grid-template-columns:${columns}" role="img" aria-label="${label}">${cells}</div>`
+    : `<div class="grid" data-grid data-size="${size}" data-tip="${tip}" style="grid-template-columns:${columns}" role="group" aria-label="${label}">${cells}</div>`;
   return `<section class="block" id="activity"${owner ? "" : " data-open"}>
 ${grid}
+<div class="key">
+<div class="key-note">${w("grid.keyNote", termNote(w("grid.loopWord"), w("grid.loopNote")))}</div>
 <ul class="legend">${legend}</ul>
-</section>${view.loops.length || hasProposals ? "" : emptyState(owner, connected)}`;
+</div>
+${helpEmpty && connected ? fillSlotsDialog(free, empty, size) : ""}
+${helpEmpty ? emptySlotDialog(connected, Boolean(free)) : ""}
+${helpEmpty && connected ? fillOneDialog(size) : ""}
+</section>${view.loops.length || hasProposals ? "" : emptyState(owner, connected, size)}`;
 }
 
-function experimentsSection(experiments, lang) {
+// The question and the bet, or their pending versions while they wait for approval.
+const expQuestion = (e) => (txt(e.question) ? shown(e.question) : shown(e.pending?.question));
+const expBet = (e) => (txt(e.hypothesis) ? shown(e.hypothesis) : shown(e.pending?.hypothesis));
+const levelUpper = (l) => (LEVELS.includes(l) ? levelLabel(l) : String(l).toUpperCase());
+
+function experimentsSection(experiments) {
   if (!experiments.length) return "";
   const sorted = [...experiments].sort((a, b) => Boolean(a.conclusion) - Boolean(b.conclusion) || (a.code < b.code ? 1 : -1));
   const rows = sorted
     .map((e) => {
-      const q = pickText(e.question, lang) || pickText(e.pending?.question, lang);
-      const bet = pickText(e.hypothesis, lang) || pickText(e.pending?.hypothesis, lang);
-      let status = STATUS[e.status] || "";
-      if (e.status === "concluded") status += ` · ${VERDICT[e.verdict] || ""}`;
-      else if (e.stage) status += ` · ROUND ${e.stage} · ${LEVEL_NAME[e.level] || String(e.level).toUpperCase()}`;
-      return `<li class="exp"><span class="exp-id">${esc(e.code)} · ${esc(e.slot.toUpperCase())} PICK</span><span class="exp-title">${esc(q)}</span><span class="exp-status" data-status="${esc(e.status)}">${esc(status)}</span>${bet ? `<p class="exp-bet"><span class="label">BET</span>${esc(bet)}</p>` : ""}</li>`;
+      const bet = expBet(e);
+      let status = w("exp.status")[e.status] || "";
+      if (e.status === "concluded") status += ` · ${w("exp.verdict")[e.verdict] || ""}`;
+      else if (e.stage) status += ` · ${w("exp.round", e.stage)} · ${levelUpper(e.level)}`;
+      return `<li class="exp"><span class="exp-id">${esc(e.code)} · ${esc(w("exp.pick", e.slot))}</span><span class="exp-title">${expQuestion(e)}</span><span class="exp-status" data-status="${esc(e.status)}">${esc(status)}</span>${bet ? `<p class="exp-bet"><span class="label">${w("exp.bet")}</span>${bet}</p>` : ""}</li>`;
     })
     .join("");
-  return `<section class="block">${sectionTitle(EXPERIMENTS_ICON, "EXPERIMENTS")}<ul class="exps">${rows}</ul></section>`;
+  return `<section class="block">${sectionTitle(EXPERIMENTS_ICON, w("exp.title"))}<ul class="exps">${rows}</ul></section>`;
 }
 
 const CHECK_ICON = phosphor(
@@ -618,76 +709,76 @@ const ARROW_RIGHT_ICON = phosphor(
 // button opens the confirmation dialog, which can also approve every loop that passes the rules.
 // Approved from the dialog, a row stays until the next load, with a link to its loop page.
 // fixable(code, rules) returns the FIX prompt for a loop that breaks a rule; null without a connected AI app.
-function proposedCard(proposed, broken, lang, published, fixable, connected) {
+function proposedCard(proposed, broken, published, fixable, connected, size) {
   const eligible = proposed.filter((l) => !broken.has(l.code));
   const rows = proposed
     .map((l) => {
-      const name = pickText(l.name, lang);
+      const name = txt(l.name);
       const bad = broken.has(l.code);
       const replaces = l.replaces?.length ? l.replaces.join(", ") : "";
+      const why = esc(w("proposals.whyCant", l.code));
       const button = bad
-        ? `<button class="icon-btn warn" type="button" title="Why ${esc(l.code)} can't be approved yet" aria-label="Why ${esc(l.code)} can't be approved yet" data-rule-break="${esc(JSON.stringify(broken.get(l.code)))}"${fixable ? ` data-fix-prompt="${esc(fixable(l.code, broken.get(l.code)))}"` : ""} data-code="${esc(l.code)}" data-name="${esc(name)}">${WARNING_ICON}</button>`
-        : `<form method="post" action="/owner/action" data-approve-one><input type="hidden" name="op" value="approve_loops"><input type="hidden" name="codes" value="${esc(l.code)}"><button class="icon-btn" type="submit" title="Approve ${esc(l.code)}" aria-label="Approve ${esc(l.code)}: ${esc(name)}" data-code="${esc(l.code)}" data-name="${esc(name)}" data-replaces="${esc(replaces)}">${CHECK_ICON}</button></form>`;
-      const scope = pickText(l.scope, lang);
-      return `<li class="row approve-row" data-branch="${esc(parseCode(l.code)?.branch || "")}"><span class="code">${esc(l.code)}</span><span><b>${esc(name)}</b>${bad ? ` <span class="flag-bad">BREAKS A RULE · RENAME FIRST</span>` : ""}<small>Done when: ${esc(pickText(l.doneWhen, lang))}${scope ? ` · Scope: ${esc(scope)}` : ""}${replaces ? ` · replaces ${esc(replaces)}` : ""} · by ${esc(l.proposedBy || "")}</small></span>${button}</li>`;
+        ? `<button class="icon-btn warn" type="button" title="${why}" aria-label="${why}" data-rule-break="${esc(JSON.stringify(broken.get(l.code)))}"${fixable ? ` data-fix-prompt="${esc(fixable(l.code, broken.get(l.code)))}"` : ""} data-code="${esc(l.code)}" data-name="${esc(name)}">${WARNING_ICON}</button>`
+        : `<form method="post" action="/owner/action" data-approve-one><input type="hidden" name="op" value="approve_loops"><input type="hidden" name="codes" value="${esc(l.code)}"><button class="icon-btn" type="submit" title="${esc(w("proposals.approveCode", l.code))}" aria-label="${esc(w("proposals.approveCode", l.code))}: ${esc(name)}" data-code="${esc(l.code)}" data-name="${esc(name)}" data-replaces="${esc(replaces)}">${CHECK_ICON}</button></form>`;
+      const scope = shown(l.scope);
+      return `<li class="row approve-row" data-branch="${esc(parseCode(l.code)?.branch || "")}"><span class="code">${esc(l.code)}</span><span><b>${shown(l.name)}</b>${bad ? ` <span class="flag-bad">${w("proposals.breaksFlag")}</span>` : ""}<small>${w("proposals.doneWhen", shown(l.doneWhen))}${scope ? w("proposals.scope", scope) : ""}${replaces ? w("proposals.replaces", esc(replaces)) : ""}${w("proposals.by", esc(l.proposedBy || ""))}</small></span>${button}</li>`;
     })
     .join("");
-  const visibility = published
-    ? "Its name, \u201cdone when\u201d and scope become public: anyone can read them on your log page and in /public.json."
-    : "Its name, \u201cdone when\u201d and scope become part of your log. Your log is private now; if you publish it, anyone can read them.";
+  const visibility = w(published ? "proposals.visibilityPublic" : "proposals.visibilityPrivate");
   const dialog = `<dialog class="modal" data-approve-dialog data-codes="${esc(JSON.stringify(eligible.map((l) => l.code)))}" aria-labelledby="approve-title">
 <form method="post" action="/owner/action">
 <input type="hidden" name="op" value="approve_loops"><div data-codes-inputs></div>
-<h3 id="approve-title" data-approve-title>Approve this loop?</h3>
+<h3 id="approve-title" data-approve-title>${w("proposals.approveThis")}</h3>
 <p class="modal-target" data-approve-loop><span class="code" data-approve-code></span><span data-approve-name></span></p>
-<p>Approving adds a loop to your list for good:</p>
+<p>${w("proposals.approvingAdds")}</p>
 <ul class="modal-list">
-<li>It counts toward your ${P.limits.loops} loops.</li>
+<li>${w("proposals.countsToward", size)}</li>
 <li>${visibility}</li>
-<li>Your agents can measure it, and it can be picked for an experiment.</li>
-<li>Its code is never reused. To take it out later you retire it, and the history keeps both steps.</li>
+<li>${w("proposals.canMeasure")}</li>
+<li>${w("proposals.neverReused")}</li>
 <li data-approve-replaces hidden></li>
 </ul>
-<label class="modal-all"><input type="checkbox" data-approve-all> <span data-approve-all-label>Approve all ${eligible.length} proposed loops that pass the rules</span></label>
-<div class="actions"><button class="btn signal" type="submit" data-approve-submit>APPROVE</button><button class="btn" type="button" data-approve-cancel>CANCEL</button></div>
+<label class="modal-all"><input type="checkbox" data-approve-all> <span data-approve-all-label>${w("proposals.approveAll", eligible.length)}</span></label>
+<div class="actions"><button class="btn signal" type="submit" data-approve-submit>${w("proposals.approve")}</button><button class="btn" type="button" data-approve-cancel>${w("common.cancel")}</button></div>
 </form>
 </dialog>
 <dialog class="modal" data-dialog data-rule-dialog aria-labelledby="rule-title">
-<h3 id="rule-title"><span data-rule-code></span> breaks a rule</h3>
+<h3 id="rule-title"><span data-rule-code></span> ${w("proposals.breaksRule")}</h3>
 <p class="modal-target" data-rule-name></p>
 <ul class="modal-list" data-rule-list></ul>
-<p>It can't be approved with this text. Rename it with your AI app, then approve the new name here.</p>
-<div class="actions"><button class="btn" type="button" data-dialog-close>CLOSE</button>${fixable ? `<button class="btn signal fix-btn" type="button" data-dialog-close data-rule-fix>${ROBOT_ICON}FIX</button>` : ""}</div>
+<p>${w("proposals.cantApprove")}</p>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.close")}</button>${fixable ? `<button class="btn signal fix-btn" type="button" data-dialog-close data-rule-fix>${ROBOT_ICON}${w("common.fix")}</button>` : ""}</div>
 </dialog>`;
-  const hint = broken.size && eligible.length < proposed.length ? " Loops that break a rule need a new name first." : "";
+  const hint = broken.size && eligible.length < proposed.length ? w("proposals.hintRename") : "";
   const counts = {};
   for (const l of proposed) {
     const b = parseCode(l.code)?.branch;
     counts[b] = (counts[b] || 0) + 1;
   }
   const tabs = P.branchOrder
-    .map((b) => `<button type="button" aria-pressed="false" data-branch-tab="${b}"${counts[b] ? "" : " disabled"}>${esc(P.branches[b].name.toUpperCase())}<span class="n">${counts[b] || 0}</span></button>`)
+    .map((b) => `<button type="button" aria-pressed="false" data-branch-tab="${b}"${counts[b] ? "" : " disabled"}>${esc(branchName(b).toUpperCase())}<span class="n">${counts[b] || 0}</span></button>`)
     .join("");
-  const add = connected ? `<button class="btn small signal fix-btn" type="button" data-add-loop>${PLUS_ICON}ADD NEW LOOP</button>` : "";
-  return `<div class="card" data-branch-filter><div class="card-head"><h3>Proposed loops (${proposed.length})</h3><div class="card-tools"><div class="tabs" role="group" aria-label="Filter by branch" hidden>${tabs}</div>${add}</div></div><p class="hint">Approve each loop with its button.${hint}</p><ul class="plain">${rows}</ul>${dialog}${connected ? addLoopDialog() : ""}<template data-open-icon>${ARROW_RIGHT_ICON}</template></div>`;
+  const add = connected ? `<button class="btn small signal fix-btn" type="button" data-add-loop>${PLUS_ICON}${w("proposals.addNew")}</button>` : "";
+  return `<div class="card" id="proposals" data-branch-filter><div class="card-head"><h3>${w("proposals.title", proposed.length)}</h3><div class="card-tools"><div class="tabs" role="group" aria-label="${esc(w("proposals.filter"))}" hidden>${tabs}</div>${add}</div></div><p class="hint">${w("proposals.approveEach")}${hint}</p><ul class="plain">${rows}</ul>${dialog}${connected ? addLoopDialog() : ""}<template data-open-icon>${ARROW_RIGHT_ICON}</template></div>`;
 }
 
 const PLUS_ICON = phosphor(
   "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z"
 );
 
-const ADD_LOOP_PROMPT =
-  "Use Onhundred to help me add new loops to my log. Read onhundred://docs/loops and onhundred://docs/voice, then call list_loops so you don't propose a loop I already have. Ask me which activities I want to add, or what you can read (calendar, email, documents) to find them. Check each loop against the six tests and decide whether it needs a scope. Show me the batch before you call propose_loops, in every language of the log.";
-
-const addLoopDialog = () => `<dialog class="modal" data-dialog data-add-loop-dialog aria-labelledby="add-loop-title">
-<h3 id="add-loop-title">Add a new loop with AI</h3>
-<p class="modal-loop">This is the prompt your agent gets. Edit it first: name the activities you have in mind, or leave it and your agent will ask.</p>
-<div class="copy block-code">${promptBox("add-loop-prompt", ADD_LOOP_PROMPT, 8)}</div>
-<div class="actions"><button class="btn" type="button" data-dialog-close>CANCEL</button>${promptMenu("#add-loop-prompt", ADD_LOOP_PROMPT, { up: true })}</div>
+// app.js writes the person's answer into the template's {answer}. With no answer the prompt stays addLoop.prompt.
+const addLoopDialog = () => {
+  const prompt = w("addLoop.prompt");
+  return `<dialog class="modal" data-dialog data-add-loop-dialog data-template="${esc(w("addLoop.template"))}" data-default="${esc(prompt)}" aria-labelledby="add-loop-title">
+<h3 id="add-loop-title">${w("addLoop.title")}</h3>
+<p class="modal-loop" id="add-loop-ask">${w("addLoop.ask")}</p>
+<input class="field" type="text" id="add-loop-answer" maxlength="200" placeholder="${esc(w("addLoop.placeholder"))}" autocomplete="off" aria-labelledby="add-loop-ask">
+<details class="prompt-peek"><summary class="link-btn">${w("common.seePrompt")}</summary><div class="copy block-code">${promptBox("add-loop-prompt", prompt, 8)}</div></details>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button>${promptMenu("#add-loop-prompt", prompt, { up: true })}</div>
 </dialog>`;
+};
 
-const fixPrompt = (target, rules, version) =>
-  `Use Onhundred to fix ${target} in my log. It breaks the protocol v${version} rules: ${rules} Rewrite it in every language of the log, then tell me what changed.`;
+const fixPrompt = (target, rules, version) => w("fix.prompt", target, rules, version);
 
 const ROBOT_ICON = phosphor(
   "M72,104a16,16,0,1,1,16,16A16,16,0,0,1,72,104Zm96,16a16,16,0,1,0-16-16A16,16,0,0,0,168,120Zm68-40V192a36,36,0,0,1-36,36H56a36,36,0,0,1-36-36V80A36,36,0,0,1,56,44h60V16a12,12,0,0,1,24,0V44h60A36,36,0,0,1,236,80Zm-24,0a12,12,0,0,0-12-12H56A12,12,0,0,0,44,80V192a12,12,0,0,0,12,12H200a12,12,0,0,0,12-12Zm-12,82a30,30,0,0,1-30,30H86a30,30,0,0,1,0-60h84A30,30,0,0,1,200,162Zm-80-6v12h16V156ZM86,168H96V156H86a6,6,0,0,0,0,12Zm90-6a6,6,0,0,0-6-6H160v12h10A6,6,0,0,0,176,162Z"
@@ -695,30 +786,28 @@ const ROBOT_ICON = phosphor(
 
 // One dialog for every FIX button; each button carries its own prompt.
 const fixDialog = () => `<dialog class="modal" data-dialog data-fix-dialog aria-labelledby="fix-title">
-<h3 id="fix-title">Fix <span data-fix-target></span> with AI</h3>
-<p class="modal-loop">Edit the prompt if you like, then open it in your AI app, or copy it into any chat connected to your log.</p>
+<h3 id="fix-title">${w("fix.title", "<span data-fix-target></span>")}</h3>
+<p class="modal-loop">${w("fix.intro")}</p>
 <div class="copy block-code">${promptBox("fix-prompt")}</div>
-<div class="actions"><button class="btn" type="button" data-dialog-close>CANCEL</button>${promptMenu("#fix-prompt", null, { up: true })}</div>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button>${promptMenu("#fix-prompt", null, { up: true })}</div>
 </dialog>`;
 
 function breaksCard(breaks, connected) {
   const rows = breaks.items
     .map((v) => {
+      const rule = ruleWords(v);
       const fix = connected
-        ? `<button class="btn signal small fix-btn" type="button" aria-label="Fix ${esc(v.target)} with AI" data-fix="${esc(fixPrompt(v.target, v.message.slice(v.target.length + 2), breaks.version))}" data-target="${esc(v.target)}">${ROBOT_ICON}FIX</button>`
+        ? `<button class="btn signal small fix-btn" type="button" aria-label="${esc(w("fix.aria", v.target))}" data-fix="${esc(fixPrompt(v.target, rule, breaks.version))}" data-target="${esc(v.target)}">${ROBOT_ICON}${w("common.fix")}</button>`
         : "";
-      return `<li class="row${connected ? " fix-row" : ""}"><span class="code">${esc(v.target)}</span><span>${esc(v.message.slice(v.target.length + 2))}</span>${fix}</li>`;
+      return `<li class="row${connected ? " fix-row" : ""}"><span class="code">${esc(v.target)}</span><span>${esc(rule)}</span>${fix}</li>`;
     })
     .join("");
-  const how = breaks.adopted
-    ? "Fix each one with your AI app, then approve the new names here. A text that breaks a rule can't be approved."
-    : "Adopting isn't blocked by these. Fix them with your AI app, before or after you adopt.";
-  const connect = connected ? "" : `<div class="actions"><a class="btn signal" href="/connect">CONNECT YOUR AI</a></div>`;
-  return `<div class="card"><h3>Breaks v${esc(breaks.version)} rules (${breaks.items.length})</h3><p>${how}</p><ul class="plain">${rows}</ul>${connect}</div>`;
+  const how = w(breaks.adopted ? "fix.howAdopted" : "fix.howAhead");
+  const connect = connected ? "" : `<div class="actions"><a class="btn signal" href="/connect">${w("common.connectAi")}</a></div>`;
+  return `<div class="card"><h3>${w("fix.breaksTitle", esc(breaks.version), breaks.items.length)}</h3><p>${how}</p><ul class="plain">${rows}</ul>${connect}</div>`;
 }
 
 function pendingSection(state, published, connected) {
-  const lang = state.meta.languages[0];
   const text = pendingItems(state);
   const proposed = state.loops.filter((l) => l.proposed && !l.retired);
   const retirements = state.loops.filter((l) => l.retireProposed && !l.retired);
@@ -729,76 +818,45 @@ function pendingSection(state, published, connected) {
   for (const v of validate(state)) {
     if (v.rule !== "name" && v.rule !== "voice") continue;
     if (!broken.has(v.target)) broken.set(v.target, []);
-    broken.get(v.target).push(v.message.slice(v.target.length + 2));
+    broken.get(v.target).push(ruleWords(v));
   }
   if (!text.length && !proposed.length && !retirements.length && !baselines.length && !breaks.items.length) return "";
   const parts = [];
   if (breaks.items.length) parts.push(breaksCard(breaks, connected));
   const fixable = connected ? (code, rules) => fixPrompt(code, rules.join(" "), state.meta.protocolVersion) : null;
-  if (proposed.length) parts.push(proposedCard(proposed, broken, lang, published, fixable, connected));
+  if (proposed.length) parts.push(proposedCard(proposed, broken, published, fixable, connected, listSize(state.meta)));
   if (connected && (breaks.items.length || proposed.some((l) => broken.has(l.code)))) parts.push(fixDialog());
   if (text.length) {
     const rows = text
       .map((i) => {
         const fields = Object.keys(i.pending)
           .map((k) => {
-            const was = pickText(i.ref[k], lang);
-            return `<span class="diff"><small>${esc(k)}</small>${was ? `<s>${esc(was)}</s>` : ""}<b>${esc(pickText(i.pending[k], lang))}</b></span>`;
+            const was = shown(i.ref[k]);
+            return `<span class="diff"><small>${esc(w("pending.fields")[k] || k)}</small>${was ? `<s>${was}</s>` : ""}<b>${shown(i.pending[k])}</b></span>`;
           })
           .join("");
         return `<label class="row"><input type="checkbox" name="targets" value="${esc(i.target)}" checked><span class="code">${esc(i.target)}</span><span>${fields}</span></label>`;
       })
       .join("");
     parts.push(
-      `<form method="post" action="/owner/action" class="card"><h3>Text waiting to go public (${text.length})</h3>${rows}<div class="actions"><button class="btn signal" type="submit" name="op" value="approve_text">PUBLISH SELECTED</button><button class="btn" type="submit" name="op" value="reject_text">DISCARD SELECTED</button></div></form>`
+      `<form method="post" action="/owner/action" class="card"><h3>${w("pending.text", text.length)}</h3>${rows}<div class="actions"><button class="btn signal" type="submit" name="op" value="approve_text">${w("pending.publish")}</button><button class="btn" type="submit" name="op" value="reject_text">${w("pending.discard")}</button></div></form>`
     );
   }
   if (retirements.length) {
     const rows = retirements
-      .map((l) => `<label class="row"><input type="checkbox" name="retire" value="${esc(l.code)}" checked><span class="code">${esc(l.code)}</span><span>${esc(pickText(l.name, lang))}<small>${esc(l.retireProposed.reason)} · by ${esc(l.retireProposed.by || "")}</small></span></label>`)
+      .map((l) => `<label class="row"><input type="checkbox" name="retire" value="${esc(l.code)}" checked><span class="code">${esc(l.code)}</span><span>${shown(l.name)}<small>${esc(l.retireProposed.reason)}${w("pending.by", esc(l.retireProposed.by || ""))}</small></span></label>`)
       .join("");
-    parts.push(`<form method="post" action="/owner/action" class="card"><input type="hidden" name="op" value="approve_loops"><h3>Retirements (${retirements.length})</h3>${rows}<button class="btn" type="submit">RETIRE SELECTED</button></form>`);
+    parts.push(`<form method="post" action="/owner/action" class="card"><input type="hidden" name="op" value="approve_loops"><h3>${w("pending.retirements", retirements.length)}</h3>${rows}<button class="btn" type="submit">${w("pending.retire")}</button></form>`);
   }
   for (const l of baselines) {
     const b = l.pendingBaseline;
     parts.push(
-      `<form method="post" action="/owner/action" class="card"><input type="hidden" name="op" value="approve_baseline"><input type="hidden" name="code" value="${esc(l.code)}"><h3>Measured cost for ${esc(l.code)}</h3><p>${esc(pickText(l.name, lang))}: ${esc(b.hoursPerWeek)} h a week, $${esc(b.moneyUsd)}, watched ${esc(b.occurrences)} times (${esc(b.confidence)} confidence)${b.quality ? `, ${esc(b.quality)}` : ""}.</p><button class="btn" type="submit">APPROVE COST</button></form>`
+      `<form method="post" action="/owner/action" class="card"><input type="hidden" name="op" value="approve_baseline"><input type="hidden" name="code" value="${esc(l.code)}"><h3>${w("pending.costFor", esc(l.code))}</h3><p>${w("pending.costLine", shown(l.name), esc(b.hoursPerWeek), esc(b.moneyUsd), esc(b.occurrences), esc(w("cost.confidence")[b.confidence] || b.confidence), b.quality ? esc(b.quality) : "")}</p><button class="btn" type="submit">${w("pending.approveCost")}</button></form>`
     );
   }
-  return `<section class="block">${sectionTitle(WAITING_ICON, "<mark>WAITING</mark> FOR YOU")}${parts.join("")}</section>`;
+  return `<section class="block">${sectionTitle(WAITING_ICON, w("pending.title"))}${parts.join("")}</section>`;
 }
 
-const HISTORY_LABELS = {
-  propose_loops: "Loops proposed",
-  rename_loop: "New name, done-when or scope proposed",
-  update_loop: "Estimate or score updated",
-  split_loop: "Split proposed",
-  merge_loops: "Merge proposed",
-  retire_loop: "Retirement proposed",
-  set_measuring: "Measuring turned on or off",
-  record_baseline: "Measured cost recorded",
-  register_stage_try: "Round written down",
-  close_stage_try: "Round ended",
-  record_hold: "Proving recorded",
-  record_drop: "Level dropped",
-  add_learned: "Lesson proposed",
-  approve_loops: "Loops approved",
-  approve_text: "Text published",
-  reject_text: "Proposed text discarded",
-  approve_baseline: "Measured cost approved",
-  set_published: "Partner publishing changed",
-  freeze_inventory: "List frozen",
-  register_experiment: "Experiment written down",
-  conclude_experiment: "Experiment ended",
-  set_meta: "Settings changed",
-  adopt_protocol: "Protocol version adopted",
-  undo_event: "A change was undone",
-  mark_check_in: "Check-in marked",
-  card_created: "Share card made",
-  connect: "AI app connected",
-  revoke_connection: "AI app disconnected",
-  revoke_api_key: "API key revoked",
-};
 const HISTORY_BAD = new Set(["undo_event", "reject_text", "record_drop", "revoke_connection", "revoke_api_key"]);
 const HISTORY_SHOWN = 8;
 const HISTORY_REFS = 6;
@@ -810,17 +868,17 @@ function eventsSection(events, loops) {
     const tool = e.tool.replace(/^override:/, "");
     const targets = String(e.target || "").split(",").filter((t) => t && t !== "meta");
     const refs = targets.slice(0, HISTORY_REFS).map((t) => ({ text: t, href: levelOf.has(t) ? `/loop/${t}` : "" }));
-    if (targets.length > HISTORY_REFS) refs.push({ text: `+${targets.length - HISTORY_REFS} MORE` });
+    if (targets.length > HISTORY_REFS) refs.push({ text: w("history.more", targets.length - HISTORY_REFS) });
     return {
       at: e.at,
       s: levelOf.get(targets.find((t) => levelOf.has(t))),
-      text: (HISTORY_LABELS[tool] || sentence(tool.replace(/_/g, " "))) + (tool !== e.tool ? " (override)" : ""),
+      text: (w("history.labels")[tool] || sentence(tool.replace(/_/g, " "))) + (tool !== e.tool ? w("history.override") : ""),
       kind: HISTORY_BAD.has(tool) ? "bad" : "",
       by: `#${e.id} · ${e.actor}`,
       refs,
     };
   });
-  return `<section class="block" id="history">${sectionTitle(HISTORY_ICON, "HISTORY")}${timelineList("history", items, HISTORY_SHOWN)}</section>`;
+  return `<section class="block" id="history">${sectionTitle(HISTORY_ICON, w("history.title"))}${timelineList("history", items, HISTORY_SHOWN)}</section>`;
 }
 
 // Same stroke weight as the Phosphor bold icons.
@@ -830,21 +888,7 @@ const PULSE_DAYS = 84;
 const PULSE_TICK = P.limits.cycleWeeks * 7;
 const PULSE_SHOWN = 6;
 const PULSE_GROUPS = 60;
-const PULSE_LABELS = {
-  approve_loops: "Added to the list",
-  approve_baseline: "Cost measured",
-  approve_text: "New text published",
-  freeze_inventory: `List frozen at ${P.limits.loops} loops`,
-  register_experiment: "Experiment written down",
-  register_stage_try: "Round started",
-  close_stage_try: { achieved: "Round passed", notAchieved: "Round didn't pass", terminated: "Round stopped", "": "Round ended" },
-  record_hold: { passed: `Held for ${P.limits.holdWeeks} weeks: moved up`, failed: `Didn't hold for ${P.limits.holdWeeks} weeks`, "": "Proving ended" },
-  record_drop: "Dropped a level",
-  conclude_experiment: { confirmed: "Experiment ended: bet right", refuted: "Experiment ended: bet wrong", unclear: "Experiment ended: not clear", "": "Experiment ended" },
-  adopt_protocol: "New protocol version adopted",
-};
 const PULSE_BAD = new Set(["record_drop", "notAchieved", "terminated", "failed"]);
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // Visitors only: what moved, day by day. Agents fill each bar from the baseline, the person stacks on top,
 // so the green share growing over the weeks is the run working.
@@ -871,10 +915,10 @@ function activitySection(items, view, meta) {
   const bar = (d, i) => {
     const back = PULSE_DAYS - 1 - i;
     const n = d.person + d.agent;
-    const mark = back === 0 ? "TODAY" : back % PULSE_TICK === 0 ? shortDate(d.day).toUpperCase() : "";
+    const mark = back === 0 ? w("pulse.today") : back % PULSE_TICK === 0 ? shortDate(d.day).toUpperCase() : "";
     const cls = back === 0 ? "now" : mark && back % (PULSE_TICK * 2) ? "minor" : "";
     const segs = (d.agent ? `<i class="a" style="height:${pct(d.agent)}%"></i>` : "") + (d.person ? `<i class="p" style="height:${pct(d.person)}%"></i>` : "");
-    return `<li style="--i:${i}"${cls ? ` class="${cls}"` : ""}${mark ? ` data-mark="${mark}"` : ""} data-date="${esc(shortDate(d.day).toUpperCase())}" data-n="${n ? plural(n, "change", "changes") : "No changes"}"${d.agent ? ` data-ag="${plural(d.agent, "by an agent", "by agents")}"` : ""}>${segs}</li>`;
+    return `<li style="--i:${i}"${cls ? ` class="${cls}"` : ""}${mark ? ` data-mark="${mark}"` : ""} data-date="${esc(shortDate(d.day).toUpperCase())}" data-n="${esc(w("pulse.changes", n))}"${d.agent ? ` data-ag="${esc(w("pulse.byAgents", d.agent))}"` : ""}>${segs}</li>`;
   };
 
   const levelOf = new Map(view.loops.map((l) => [l.code, l.level]));
@@ -887,58 +931,58 @@ function activitySection(items, view, meta) {
       for (const c of it.codes) if (!last.codes.includes(c)) last.codes.push(c);
     } else groups.push({ key, ...it, codes: [...it.codes] });
   }
+  // Newest first: a freeze older than the list's growth was at 10.
+  let grown = false;
   const rows = groups.slice(0, PULSE_GROUPS).map((g) => {
-    const label = PULSE_LABELS[g.tool];
+    if (g.tool === "grow_list") grown = true;
+    const labels = w("pulse.labels");
+    const label = g.tool === "freeze_inventory" ? labels.freeze_inventory(grown ? 10 : listSize(meta)) : labels[g.tool];
     const refs = g.codes.slice(0, HISTORY_REFS).map((c) => ({ text: c, href: levelOf.has(c) ? `/loop/${c}` : "" }));
-    if (g.codes.length > HISTORY_REFS) refs.push({ text: `+${g.codes.length - HISTORY_REFS} MORE` });
+    if (g.codes.length > HISTORY_REFS) refs.push({ text: w("history.more", g.codes.length - HISTORY_REFS) });
     return {
       at: g.day,
       s: g.codes.map((c) => levelOf.get(c) || levelOf.get(firstLoop.get(c))).find(Boolean),
       text: typeof label === "string" ? label : label[g.result || ""],
       kind: PULSE_BAD.has(g.tool) || PULSE_BAD.has(g.result) ? "bad" : "",
-      by: g.by === "agent" ? "BY AN AGENT" : g.by === "system" ? "ON SCHEDULE" : name ? `BY ${name}` : "BY HAND",
+      by: g.by === "agent" ? w("pulse.byAgent") : g.by === "system" ? w("pulse.onSchedule") : name ? w("pulse.byName", name) : w("pulse.byHand"),
       byKind: g.by === "agent" ? "agent" : "person",
       refs,
     };
   });
 
-  const sum = total
-    ? `<b>${total}</b> ${total === 1 ? "change" : "changes"} in the last ${weeks} weeks. Agents made <b class="ag">${agents}</b>.`
-    : `No changes in the last ${weeks} weeks.`;
+  const sum = total ? w("pulse.sum", total, weeks, agents) : w("pulse.none", weeks);
   return `<section class="block pulse" id="pulse">
-<div class="pulse-head">${sectionTitle(PULSE_ICON, "ACTIVITY")}<ul class="pulse-key"><li data-by="agent">AGENTS</li><li data-by="person">${esc(name || "BY HAND")}</li></ul></div>
+<div class="pulse-head">${sectionTitle(PULSE_ICON, w("pulse.title"))}<ul class="pulse-key"><li data-by="agent">${w("pulse.agents")}</li><li data-by="person">${esc(name || w("pulse.byHand"))}</li></ul></div>
 <p class="pulse-sum">${sum}</p>
-<figure class="spark" data-spark role="img" aria-label="Changes per day for the last ${weeks} weeks: ${total} in all, ${agents} by agents."><ol class="spark-bars" style="--days:${PULSE_DAYS}">${days.map(bar).join("")}</ol></figure>
+<figure class="spark" data-spark role="img" aria-label="${esc(w("pulse.aria", weeks, total, agents))}"><ol class="spark-bars" style="--days:${PULSE_DAYS}">${days.map(bar).join("")}</ol></figure>
 ${timelineList("pulse", rows, PULSE_SHOWN)}
 </section>`;
 }
 
-const PUBLISH_CONFIRM =
-  "Publish your log? Anyone with the link sees your grid and experiments. Evidence, notes and partner loops stay private.";
-
 const privateNotice = () =>
-  `<form method="post" action="/owner/action" class="notice upgrade" data-confirm="${esc(PUBLISH_CONFIRM)}"><input type="hidden" name="op" value="set_meta"><span>Your progress is private. You can publish it here.</span><button class="btn signal small" type="submit">PUBLISH</button></form>`;
+  `<form method="post" action="/owner/action" class="notice upgrade" data-confirm="${esc(w("notices.publishConfirm"))}"><input type="hidden" name="op" value="set_meta"><span>${w("notices.private")}</span><button class="btn signal small" type="submit">${w("notices.publish")}</button></form>`;
 
 // Closing it leaves the page exactly as a visitor sees it; a reload brings it back.
 const previewNotice = () =>
-  `<div class="notice good closable"><span>This is what visitors see. <a href="/">Back to your log</a>.</span><button class="notice-close" type="button" data-dismiss aria-label="Close this note to see the page as visitors do">${CLOSE_ICON}</button></div>`;
+  `<div class="notice good closable"><span>${w("notices.preview")}</span><button class="notice-close" type="button" data-dismiss aria-label="${esc(w("notices.previewClose"))}">${CLOSE_ICON}</button></div>`;
 
 // Opened from an AI app's link: the owner view without a sign-in, so nothing on it changes the log.
 const viewOnlyNotice = () =>
-  `<div class="notice upgrade view-only"><span><b>VIEW ONLY.</b> Your AI app's link shows your log for ${VIEW_HOURS} hours. Sign in to approve or change anything.</span><a class="btn signal small" href="/login?next=/">SIGN IN</a></div>`;
+  `<div class="notice upgrade view-only"><span>${w("notices.viewOnly", VIEW_HOURS)}</span><a class="btn signal small" href="/login?next=/">${w("notices.signIn")}</a></div>`;
 
 function waitingLine(state) {
   const n = pendingItems(state).length + state.loops.filter((l) => (l.proposed || l.pendingBaseline || l.retireProposed) && !l.retired).length;
-  return n ? notice(`${n} ${n === 1 ? "item waits" : "items wait"} for you. <a href="/login?next=/">Sign in</a> to approve ${n === 1 ? "it" : "them"}.`) : "";
+  return n ? notice(w("notices.waiting", n)) : "";
 }
 
-export function logPage({ state, owner, viewOnly = false, events = [], publicEvents = [], url, upgrade, configured: isConfigured, hasConnections, published = false, preview = false, share = null, ready = [] }) {
+export function logPage({ state, lang, owner, viewOnly = false, events = [], publicEvents = [], url, upgrade, configured: isConfigured, hasConnections, published = false, preview = false, share = null, ready = [] }) {
   const meta = state.meta;
-  const lang = meta.languages[0];
+  usePage(meta, lang, { tags: owner });
   const view = owner ? derive(state) : publicView(state);
   const acts = owner && !viewOnly;
-  const title = meta.ownerName ? `${meta.ownerName}: Onhundred Protocol log` : "Onhundred Protocol log";
-  const head = profileHead(meta, view.metrics.delegatedPoints, { owner: acts, connected: hasConnections, published, origin: url?.origin || "" });
+  const title = w("site.logTitle", meta.ownerName);
+  const head = profileHead(meta, view.metrics.delegatedPoints, { owner: acts, published, origin: url?.origin || "" });
+  const proposals = acts ? state.loops.filter((l) => l.proposed && !l.retired).length : 0;
   const body = [
     flash(url),
     share ? shareBanner(share) : "",
@@ -947,19 +991,18 @@ export function logPage({ state, owner, viewOnly = false, events = [], publicEve
     !isConfigured ? setupNotice() : "",
     acts && ready.length ? readyPanel(ready) : "",
     acts ? protocolNotice(meta, upgrade) : "",
-    acts && !hasConnections ? notice(`Next: <a href="/connect">connect your first AI app</a>.`, "good") : "",
+    acts && !hasConnections ? notice(w("notices.connectFirst"), "good") : "",
     acts && !published ? privateNotice() : "",
     acts && meta.links == null ? linksNotice(published) : "",
     head,
-    readout(view, meta, acts, head.includes('class="profile-name')),
-    gridSection(view, meta, acts, hasConnections, acts && state.loops.some((l) => l.proposed && !l.retired)),
+    readout(view, meta, acts, head.includes('class="profile-name'), proposals),
+    gridSection(view, meta, acts, hasConnections, proposals > 0),
     owner ? "" : activitySection(publicActivity(publicEvents, view), view, meta),
     acts ? pendingSection(state, published, hasConnections) : viewOnly ? waitingLine(state) : "",
-    experimentsSection(view.experiments, lang),
+    experimentsSection(view.experiments),
     owner ? eventsSection(events, state.loops) : "",
   ].join("\n");
-  const about = pickText(meta.about, lang);
-  return layout({ title, ownerName: meta.ownerName, owner: acts, signedIn: acts || preview, body, current: "/", origin: url?.origin, description: about, ...shareOg(share) });
+  return layout({ title, meta, owner: acts, signedIn: acts || preview, body, current: "/", origin: url?.origin, url, description: txt(meta.about), ...shareOg(share) });
 }
 
 // ---------------------------------------------------------------------------
@@ -969,38 +1012,10 @@ const lvIdx = (l) => LEVELS.indexOf(l);
 const sentence = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const upDate = (day) => (day ? shortDate(String(day).slice(0, 10)).toUpperCase() : "");
 const byStage = (e) => [...(e.stages || [])].sort((a, b) => a.stage - b.stage || a.try - b.try);
-const GROUP_WORD = { automateNow: "Automate now", later: "Later", notYet: "Not yet" };
-const CRITERIA_WORD = { time: "TIME", frequency: "FREQUENCY", rules: "CLEAR RULES", digital: "DIGITAL DATA", risk: "RISK" };
-const CRITERIA_NOTE = {
-  time: "How many hours a week this loop takes. 1 is very little, 5 is a lot. More time means more to win back, so it adds to the score.",
-  frequency: "How often this loop repeats. 1 is rarely, 5 is all the time. A loop that repeats often pays back the setup sooner, so it adds to the score.",
-  rules: "How well defined the way it's done is. 1 is a judgment call every time, 5 is steps anyone could follow. Clear steps are easier to hand off, so it adds to the score.",
-  digital: "Whether the information it needs already lives in apps, files or email. 1 is mostly in your head or on paper, 5 is all in systems. An agent only works with what it can read, so it adds to the score.",
-  risk: `What happens if the agent gets it wrong. 1 is an easy fix, 5 is real harm or lost money. Risk subtracts from the score, and ${P.triage.notYet.minRisk} or more puts the loop in Not yet.`,
-};
-const OUTCOME_WORD = { achieved: "passed", notAchieved: "didn't pass", terminated: "stopped" };
-const BET_WORD = { confirmed: "bet right", refuted: "bet wrong", unclear: "not clear" };
-const SOURCE_WORD = { baseline: "measured cost", estimate: "estimate" };
-const DROP_WORD = { failingDays: `after ${P.limits.failureDays} failing days`, harm: "after harm", consentLost: "after consent was withdrawn" };
 const UPDOWN_ICON = phosphor(
   "M184.49,167.51a12,12,0,0,1,0,17l-48,48a12,12,0,0,1-17,0l-48-48a12,12,0,0,1,17-17L128,207l39.51-39.52A12,12,0,0,1,184.49,167.51Zm-96-79L128,49l39.51,39.52a12,12,0,0,0,17-17l-48-48a12,12,0,0,0-17,0l-48,48a12,12,0,0,0,17,17Z"
 );
-
-// History events that change a loop without leaving a dated trace in its own data.
-const EVENT_LABELS = {
-  propose_loops: "Proposed",
-  approve_loops: "Approved by the owner",
-  rename_loop: "New name, done-when or scope proposed",
-  approve_text: "New text published",
-  reject_text: "Proposed text discarded",
-  update_loop: "Estimate or score updated",
-  set_measuring: "Measuring turned on or off",
-  split_loop: "Split proposed",
-  merge_loops: "Merge proposed",
-  retire_loop: "Retirement proposed",
-  set_published: "Partner publishing changed",
-  undo_event: "A change was undone",
-};
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
 // The try that still decides something: running, or passed and still proving.
 const openTry = (e) => {
@@ -1021,65 +1036,142 @@ function levelStack(loop, exps) {
   };
   const ahead = (l) => {
     const open = exps.map((e) => [e, openTry(e)]).find(([, t]) => t?.level === l);
-    if (open) return [`${open[0].code} ${open[1].outcome == null ? "TRYING NOW" : "PROVING"}`, "run"];
+    if (open) return [w(open[1].outcome == null ? "loop.tryingNow" : "loop.provingNow", open[0].code), "run"];
     const failed = tries.filter((t) => t.level === l && (t.outcome === "notAchieved" || t.outcome === "terminated" || t.hold?.result === "failed")).at(-1);
-    if (failed) return [`DIDN'T PASS ${upDate(failed.hold?.at || failed.closedAt)}`, "bad"];
-    return ["NOT TRIED YET", ""];
+    if (failed) return [w("loop.didntPass", upDate(failed.hold?.at || failed.closedAt)), "bad"];
+    return [w("loop.notTried"), ""];
   };
   const measured = isMeasured(loop);
   const mark = (l) => (l === "still" && measured ? " data-measured" : "");
   const inner = (l, [meta, kind] = ["", ""], extra = "") =>
-    `<i class="cell" data-s="${l}"${mark(l)}${extra}></i><span class="lvl-name">${LEVEL_NAME[l]}${l === ceiling && l !== "autonomous" ? `<span class="tag">LIMIT</span>` : ""}</span><span class="lvl-plain">${esc(sentence(LEVEL_NOTES[l]))}</span><span class="lvl-meta${kind ? " " + kind : ""}">${esc(meta)}`;
-  let nowMeta = loop.pendingBaseline ? ["COST WAITING", "run"] : loop.flag === "measuring" ? ["MEASURING", "run"] : ["", ""];
+    `<i class="cell" data-s="${l}"${mark(l)}${extra}></i><span class="lvl-name">${levelLabel(l)}${l === ceiling && l !== "autonomous" ? `<span class="tag">${w("loop.limit")}</span>` : ""}</span><span class="lvl-plain">${esc(sentence(levelNote(l)))}</span><span class="lvl-meta${kind ? " " + kind : ""}">${esc(meta)}`;
+  let nowMeta = loop.pendingBaseline ? [w("loop.costWaiting"), "run"] : loop.flag === "measuring" ? [w("loop.measuring"), "run"] : ["", ""];
   const since = reachedOn(loop.level);
-  if (!nowMeta[0] && since) nowMeta = [`SINCE ${upDate(since)}`, ""];
-  if (!nowMeta[0] && loop.level === "still" && measured) nowMeta = ["MEASURED", ""];
+  if (!nowMeta[0] && since) nowMeta = [w("loop.since", upDate(since)), ""];
+  if (!nowMeta[0] && loop.level === "still" && measured) nowMeta = [w("loop.measured"), ""];
   const flag = loop.flag ? ` data-flag="${esc(loop.flag)}"` : "";
   const rows = [];
-  for (let i = top; i > cur; i--) rows.push(`<li class="lvl-row up" style="--k:${i - cur}">${inner(LEVELS[i], ahead(LEVELS[i]))}</span></li>`);
+  const opens = (l) => `type="button" data-open-dialog="#lvl-dialog-${l}" aria-haspopup="dialog"`;
+  for (let i = top; i > cur; i--) rows.push(`<li><button class="lvl-row up" ${opens(LEVELS[i])} style="--k:${i - cur}">${inner(LEVELS[i], ahead(LEVELS[i]))}</span></button></li>`);
   for (let i = cur - 1; i >= 0; i--) {
     const on = reachedOn(LEVELS[i]);
-    rows.push(`<li class="lvl-row down" data-reached style="--k:${cur - i}">${inner(LEVELS[i], [on ? upDate(on) : "", ""])}</span></li>`);
+    rows.push(`<li><button class="lvl-row down" ${opens(LEVELS[i])} data-reached style="--k:${cur - i}">${inner(LEVELS[i], [on ? upDate(on) : "", ""])}</span></button></li>`);
   }
   return `<div class="lvl" data-level-stack>
-<button class="lvl-row lvl-now" type="button" aria-expanded="false" aria-controls="lvl-others" aria-label="Level: ${esc(levelName(loop.level))}. Show every level">${inner(loop.level, nowMeta, flag)}${UPDOWN_ICON}</span></button>
-<ol class="lvl-others" id="lvl-others" aria-label="Every level up to the limit">${rows.join("")}</ol>
+<button class="lvl-row lvl-now" type="button" aria-expanded="false" aria-controls="lvl-others" aria-label="${esc(w("loop.levelAria", lvName(loop.level)))}">${inner(loop.level, nowMeta, flag)}${UPDOWN_ICON}</span></button>
+<ol class="lvl-others" id="lvl-others" aria-label="${esc(w("loop.everyLevel"))}" inert>${rows.join("")}</ol>
 </div>`;
 }
 
-function experimentItem(e, lang, today) {
-  const q = pickText(e.question, lang) || pickText(e.pending?.question, lang);
-  const bet = pickText(e.hypothesis, lang) || pickText(e.pending?.hypothesis, lang);
-  let status = STATUS[e.status] || "";
-  if (e.conclusion) status += ` ${upDate(e.conclusion.at)} · ${VERDICT[e.conclusion.hypothesis] || ""}`;
-  else if (e.stage) status += ` · ROUND ${e.stage} · ${LEVEL_NAME[e.level] || String(e.level).toUpperCase()}`;
+// What has to happen for the loop to reach another level, in plain words. Higher levels come from rounds that pass and prove,
+// lower ones from drops. actions: loopActions() ids that move it there, most direct first.
+function levelPath(loop, exps, target, version) {
+  const cur = lvIdx(loop.level);
+  const j = lvIdx(target);
+  const name = lvName(target);
+  const { failureDays, maxStages, occurrencesToMeasure: n } = P.limits;
+  if (j < cur) {
+    const steps = [j === cur - 1 ? w("path.dropOne", failureDays, name) : w("path.dropMany", failureDays, cur - j, name)];
+    if (target === "still") steps.push(w("path.harm", name));
+    return {
+      title: w("path.downTitle", name),
+      intro: w("path.downIntro", sentence(name), levelNote(target)),
+      steps,
+      foot: w("path.downFoot"),
+      actions: j === cur - 1 ? ["recordDrop"] : target === "still" ? ["stopNow"] : [],
+    };
+  }
+  const next = LEVELS[cur + 1];
+  const nextName = lvName(next);
+  const climb = LEVELS.slice(cur + 1, j + 1);
+  const open = exps.find((e) => !e.conclusion);
+  const t = open && byStage(open).at(-1);
+  const passed = open && t?.outcome === "achieved" && !t.hold && t.level === next;
+  const steps = [];
+  if (loop.proposed) steps.push(w("path.approveFirst"));
+  if (loop.level === "still" && !isMeasured(loop)) {
+    if (!estimateCanStart(version)) steps.push(w(loop.flag === "measuring" ? "path.finishMeasuring" : "path.measure", n));
+    else if (!loop.estimate?.hoursPerWeek) steps.push(w("path.estimate"));
+  }
+  if (open && t?.outcome == null && t?.level === next) steps.push(w("path.tryingNext", open.code, t.stage, nextName, shortDate(t.deadline)));
+  else if (passed) steps.push(w("path.passedAt", open.code, nextName));
+  else if (open) steps.push(w("path.nextRound", open.code, nextName));
+  else steps.push(w("path.picks", nextName));
+  if (!passed) steps.push(w("path.passes", nextName));
+  steps.push(w("path.keeps", nextName));
+  if (climb.length > 1) steps.push(w("path.thenAgain", climb.slice(1).map(lvName).join(w("path.thenJoin")), maxStages));
+  const limit = target === ceilingOf(loop) && target !== "autonomous" ? w("path.limit") : "";
+  return {
+    title: w("path.upTitle", name),
+    intro: w("path.upIntro", sentence(name), levelNote(target), limit, lvName(loop.level)),
+    steps,
+    foot: w("path.upFoot"),
+    actions: ["endRound", "recordProving", "nextRound", "draft", "startMeasuring", "recordCost"],
+  };
+}
+
+// Escapes the text and marks every level name in it with that level's square.
+const markLevels = (text) =>
+  LEVELS.reduce((s, l) => s.replaceAll(esc(lvName(l)), `<span class="lvl-word"><i class="cell" data-s="${l}"></i>${esc(lvName(l))}</span>`), esc(text));
+
+// A button that opens loopPromptDialog() with one of loopActions().
+const askButton = (a, label = a.label.toUpperCase()) =>
+  `<button class="btn signal fix-btn" type="button" data-dialog-close data-loop-prompt="${esc(a.prompt)}" data-title="${esc(lowerFirst(a.label))}">${ROBOT_ICON}${esc(label)}</button>`;
+
+// One dialog per level the stack can open. actions: the owner's loopActions(), or null for visitors.
+function levelDialogs(loop, exps, version, actions, connected) {
+  const cur = lvIdx(loop.level);
+  const top = lvIdx(ceilingOf(loop));
+  return LEVELS.filter((l, i) => i !== cur && i <= Math.max(top, cur))
+    .map((l) => {
+      const path = levelPath(loop, exps, l, version);
+      const ask = actions && connected && path.actions.map((id) => actions.find((a) => a?.id === id)).find(Boolean);
+      let action = "";
+      if (ask) action = askButton(ask);
+      else if (actions && !connected) action = `<a class="btn signal" href="/connect">${w("common.connectAi")}</a>`;
+      return `<dialog class="modal" data-dialog id="lvl-dialog-${l}" aria-labelledby="lvl-dialog-${l}-title">
+<h3 id="lvl-dialog-${l}-title">${esc(path.title).replace(esc(lvName(l)), `<span class="lvl-target">${esc(lvName(l))}</span>`)}</h3>
+<p class="modal-loop">${markLevels(path.intro)}</p>
+<ol class="modal-list">${path.steps.map((s) => `<li>${markLevels(s)}</li>`).join("")}</ol>
+<p class="modal-loop">${markLevels(path.foot)}</p>
+<div class="actions"><button class="btn fix-btn" type="button" data-dialog-close>${CLOSE_ICON}${w("common.close")}</button>${action}</div>
+</dialog>`;
+    })
+    .join("");
+}
+
+function experimentItem(e, today) {
+  const bet = expBet(e);
+  let status = w("exp.status")[e.status] || "";
+  if (e.conclusion) status += ` ${upDate(e.conclusion.at)} · ${w("exp.verdict")[e.conclusion.hypothesis] || ""}`;
+  else if (e.stage) status += ` · ${w("exp.round", e.stage)} · ${levelUpper(e.level)}`;
   const stages = byStage(e)
     .map((t) => {
       const end = t.closedAt || t.deadline;
-      let out = "TRYING";
-      if (t.outcome == null && t.start > today) out = "SCHEDULED";
-      if (t.outcome) out = OUTCOME_WORD[t.outcome].toUpperCase();
-      if (t.outcome === "achieved") out += t.hold ? (t.hold.result === "passed" ? " · PROVED" : " · DIDN'T HOLD") : " · PROVING";
+      let out = w("exp.trying");
+      if (t.outcome == null && t.start > today) out = w("exp.scheduled");
+      if (t.outcome) out = w("exp.outcome")[t.outcome].toUpperCase();
+      if (t.outcome === "achieved") out += t.hold ? w(t.hold.result === "passed" ? "exp.proved" : "exp.didntHold") : w("exp.proving");
       const ok = t.outcome == null || (t.outcome === "achieved" && t.hold?.result !== "failed");
-      const learned = pickText(t.learned, lang);
-      return `<li><span class="st">ROUND ${t.stage}${t.try > 1 ? ` · TRY ${t.try}` : ""} · ${LEVEL_NAME[t.level] || t.level.toUpperCase()}</span><span>${t.start ? `${shortDate(t.start)} to ${shortDate(end)}.` : ""}${learned ? ` ${esc(learned)}` : ""}</span><span class="out ${ok ? "ok" : "no"}">${out}</span></li>`;
+      const learned = shown(t.learned);
+      return `<li><span class="st">${w("exp.round", t.stage)}${t.try > 1 ? w("exp.tryN", t.try) : ""} · ${levelUpper(t.level)}</span><span>${t.start ? w("exp.dates", shortDate(t.start), shortDate(end)) : ""}${learned ? ` ${learned}` : ""}</span><span class="out ${ok ? "ok" : "no"}">${out}</span></li>`;
     })
     .join("");
-  return `<li class="exp"><span class="exp-id">${esc(e.code)} · ${esc(String(e.slot).toUpperCase())} PICK</span><span class="exp-title">${esc(q)}</span><span class="exp-status" data-status="${esc(e.status)}">${esc(status)}</span>${bet ? `<p class="exp-bet"><span class="label">BET</span>${esc(bet)}</p>` : ""}${stages ? `<ol class="stages">${stages}</ol>` : ""}</li>`;
+  return `<li class="exp"><span class="exp-id">${esc(e.code)} · ${esc(w("exp.pick", e.slot))}</span><span class="exp-title">${expQuestion(e)}</span><span class="exp-status" data-status="${esc(e.status)}">${esc(status)}</span>${bet ? `<p class="exp-bet"><span class="label">${w("exp.bet")}</span>${bet}</p>` : ""}${stages ? `<ol class="stages">${stages}</ol>` : ""}</li>`;
 }
 
 function experimentsBox(exps) {
-  if (!exps.length) return `<span class="exp-box none">NO EXPERIMENTS YET</span>`;
+  if (!exps.length) return `<span class="exp-box none">${w("exp.none")}</span>`;
   const ongoing = exps.filter((e) => !e.conclusion).length;
-  return `<button class="exp-box" type="button" data-drawer-open aria-haspopup="dialog" aria-controls="exp-drawer"><b>${exps.length}</b>${exps.length === 1 ? "EXPERIMENT" : "EXPERIMENTS"}${ongoing ? `<span class="dot" aria-hidden="true"></span><span class="run">${ongoing} ONGOING</span>` : ""}${CARET_ICON}</button>`;
+  return `<button class="exp-box" type="button" data-drawer-open aria-haspopup="dialog" aria-controls="exp-drawer"><b>${exps.length}</b>${w("exp.count", exps.length)}${ongoing ? `<span class="dot" aria-hidden="true"></span><span class="run">${w("exp.ongoing", ongoing)}</span>` : ""}${CARET_ICON}</button>`;
 }
 
-const experimentsDrawer = (code, exps, lang, today) =>
+const experimentsDrawer = (code, exps, today) =>
   exps.length
     ? `<dialog class="drawer" id="exp-drawer" data-dialog aria-labelledby="drawer-title">
-<div class="drawer-head"><h2 id="drawer-title">Experiments</h2><button class="btn small" type="button" data-dialog-close>CLOSE</button></div>
-<p class="muted">Every experiment that includes ${esc(code)}, newest first.</p>
-<ul class="exps">${exps.map((e) => experimentItem(e, lang, today)).join("")}</ul>
+<div class="drawer-head"><h2 id="drawer-title">${w("exp.drawerTitle")}</h2><button class="btn small" type="button" data-dialog-close>${w("common.close")}</button></div>
+<p class="muted">${w("exp.drawerIntro", esc(code))}</p>
+<ul class="exps">${exps.map((e) => experimentItem(e, today)).join("")}</ul>
 </dialog>`
     : "";
 
@@ -1088,58 +1180,87 @@ function nextLine(loop, exps, owner, today, measuringFull, version) {
   const open = exps.find((e) => !e.conclusion);
   const t = open && byStage(open).at(-1);
   if (loop.retired) return "";
-  if (loop.proposed) return "Approve it on the log page to add it to your list.";
-  if (loop.pendingBaseline) return owner ? "A measured cost is waiting for your approval on the log page." : "A measured cost is waiting for approval.";
+  if (loop.proposed) return w("nextLine.approve");
+  if (loop.pendingBaseline) return w(owner ? "nextLine.costOwner" : "nextLine.costVisitor");
   if (open && t?.outcome == null && t) {
-    if (t.start > today) return `${open.code} round ${t.stage} starts ${shortDate(t.start)}.`;
-    return `${open.code} round ${t.stage} ends ${shortDate(t.deadline)}. If it passes, ${P.limits.holdWeeks} weeks of proving decide ${levelName(t.level)}.`;
+    if (t.start > today) return w("nextLine.starts", open.code, t.stage, shortDate(t.start));
+    return w("nextLine.ends", open.code, t.stage, shortDate(t.deadline), lvName(t.level));
   }
   if (open && t?.outcome === "achieved" && !t.hold)
-    return `${open.code} is proving ${levelName(t.level)}. Proving ends ${shortDate(new Date(Date.parse(`${t.closedAt}T00:00:00Z`) + P.limits.holdWeeks * 7 * 86400000).toISOString().slice(0, 10))}.`;
-  if (open) return `${open.code} has no running round. The next round or the end of the experiment comes next.`;
+    return w("nextLine.proving", open.code, lvName(t.level), shortDate(new Date(Date.parse(`${t.closedAt}T00:00:00Z`) + P.limits.holdWeeks * 7 * 86400000).toISOString().slice(0, 10)));
+  if (open) return w("nextLine.noRound", open.code);
   if (loop.level === "still" && !isMeasured(loop)) {
     const n = P.limits.occurrencesToMeasure;
-    if (loop.flag === "measuring") return `Being measured now. After it happens ${n} times, its real cost is the starting point for time saved.`;
+    if (loop.flag === "measuring") return w("nextLine.beingMeasured", n);
     if (!estimateCanStart(version)) {
-      if (!owner) return `Nobody has measured this loop yet. Before an experiment, it has to happen ${n} times so its real cost is known.`;
-      return measuringFull
-        ? `All ${P.limits.measuringSlots} measuring spots are taken. Start measuring this loop when one opens.`
-        : `Start measuring it. After it happens ${n} times, its real cost is known and experiments can start.`;
+      if (!owner) return w("nextLine.notMeasured", n);
+      return measuringFull ? w("nextLine.spotsTaken", P.limits.measuringSlots) : w("nextLine.startMeasuring", n);
     }
-    if (!loop.estimate?.hoursPerWeek)
-      return owner
-        ? "Write down its estimated cost so it can be picked for an experiment. Measure it if you want proof of time saved."
-        : "It needs an estimated cost before an experiment can pick it.";
+    if (!loop.estimate?.hoursPerWeek) return w(owner ? "nextLine.estimateOwner" : "nextLine.estimateVisitor");
   }
-  if (lvIdx(loop.level) >= lvIdx(ceilingOf(loop))) return `It's at its limit, ${levelName(loop.level)}. No experiment takes it higher.`;
+  if (lvIdx(loop.level) >= lvIdx(ceilingOf(loop))) return w("nextLine.atLimit", lvName(loop.level));
   const group = triageGroup(loop);
-  if (group === "automateNow") return "In Automate now: it can be the easy pick in the next experiment.";
-  if (isHardEligible(loop)) return "It can be the hard pick in the next experiment.";
-  return "No experiment yet. It waits to be picked.";
+  const start = w("nextLine.start", START_LINK);
+  if (group === "automateNow") return owner ? start + w("nextLine.easyOwner") : w("nextLine.easyVisitor");
+  if (isHardEligible(loop)) return owner ? start + w("nextLine.hardOwner") : w("nextLine.hardVisitor");
+  return owner ? start : w("nextLine.waits");
+}
+
+// Stands in nextLine()'s text for the link that opens startExperimentDialog().
+const START_LINK = "{start-experiment}";
+const startLink = () => `<button class="link-btn" type="button" data-open-dialog="#start-exp-dialog" aria-haspopup="dialog">${w("nextLine.startLink")}</button>`;
+
+function startExperimentDialog(loop, version, actions, connected) {
+  const { maxStages, occurrencesToMeasure: n } = P.limits;
+  const slots = P.limits.experimentSlots.length;
+  const pick = triageGroup(loop) === "automateNow" ? w("startExp.easy") : isHardEligible(loop) ? w("startExp.hard") : "";
+  const cost = isMeasured(loop)
+    ? w("startExp.costMeasured")
+    : estimateCanStart(version)
+      ? w("startExp.costEstimate", Boolean(loop.estimate?.hoursPerWeek), n)
+      : w("startExp.costMeasure", n);
+  const steps = [
+    w("startExp.pick", slots, pick),
+    cost,
+    w("startExp.question"),
+    w("startExp.bet"),
+    w("startExp.howFar", lvName(LEVELS[lvIdx(loop.level) + 1])),
+    w("startExp.plan", maxStages),
+  ];
+  const ask = connected && actions?.find((a) => a?.id === "draft");
+  let action = "";
+  if (ask) action = askButton(ask, w("startExp.draft"));
+  else if (actions && !connected) action = `<a class="btn signal" href="/connect">${w("common.connectAi")}</a>`;
+  return `<dialog class="modal" data-dialog id="start-exp-dialog" aria-labelledby="start-exp-title">
+<h3 id="start-exp-title">${w("startExp.title")}</h3>
+<p class="modal-loop">${w("startExp.intro")}</p>
+<ol class="modal-list">${steps.map((s) => `<li>${markLevels(s)}</li>`).join("")}</ol>
+<p class="modal-loop">${w("startExp.foot")}</p>
+<div class="actions"><button class="btn fix-btn" type="button" data-dialog-close>${CLOSE_ICON}${w("common.close")}</button>${action}</div>
+</dialog>`;
 }
 
 function loopTimeline(loop, exps, events) {
   const items = [];
   const add = (at, s, text, kind = "", by = "") => at && items.push({ at: String(at), s, text, kind, by, i: items.length });
   const b = loop.baseline || loop.pendingBaseline;
-  if (b?.recordedAt)
-    add(b.recordedAt, "still", `Measured cost recorded: watched ${b.occurrences} times${b.hoursPerWeek != null ? `, ${b.hoursPerWeek} h a week` : ""}`, "", b.recordedBy || "");
-  if (loop.baseline?.approvedAt) add(loop.baseline.approvedAt, "still", "Measured cost approved: the loop is measured");
+  if (b?.recordedAt) add(b.recordedAt, "still", w("timeline.costRecorded", b.occurrences, b.hoursPerWeek), "", b.recordedBy || "");
+  if (loop.baseline?.approvedAt) add(loop.baseline.approvedAt, "still", w("timeline.costApproved"));
   for (const e of exps) {
-    add(e.registeredAt, e.startLevel, `${e.code} written down as the ${e.slot} pick`);
+    add(e.registeredAt, e.startLevel, w("timeline.written", e.code, w("exp.slot")[e.slot] || e.slot));
     for (const t of byStage(e)) {
-      const name = `${e.code} round ${t.stage}${t.try > 1 ? ` try ${t.try}` : ""}`;
-      add(t.start, t.level, `${name} started: aims for ${levelName(t.level)}`, t.outcome == null ? "run" : "");
-      if (t.closedAt) add(t.closedAt, t.level, `${name} ${OUTCOME_WORD[t.outcome]}`, t.outcome === "achieved" ? "" : "bad");
+      const name = w("timeline.roundName", e.code, t.stage, t.try);
+      add(t.start, t.level, w("timeline.started", name, lvName(t.level)), t.outcome == null ? "run" : "");
+      if (t.closedAt) add(t.closedAt, t.level, w("timeline.closed", name, w("exp.outcome")[t.outcome]), t.outcome === "achieved" ? "" : "bad");
       if (t.hold)
-        add(t.hold.at, t.level, t.hold.result === "passed" ? `Proved: reached ${levelName(t.level)}` : `${name} didn't hold`, t.hold.result === "passed" ? "" : "bad");
+        add(t.hold.at, t.level, t.hold.result === "passed" ? w("timeline.proved", lvName(t.level)) : w("timeline.didntHold", name), t.hold.result === "passed" ? "" : "bad");
     }
-    if (e.conclusion) add(e.conclusion.at, e.conclusion.level || e.startLevel, `Ended ${e.code}: ${BET_WORD[e.conclusion.hypothesis] || ""}`);
+    if (e.conclusion) add(e.conclusion.at, e.conclusion.level || e.startLevel, w("timeline.ended", e.code, w("exp.betWord")[e.conclusion.hypothesis] || ""));
   }
-  for (const d of loop.drops || [])
-    add(d.at, d.to, `Dropped from ${levelName(d.from)} to ${levelName(d.to)} ${DROP_WORD[d.cause] || ""}`.trim(), "bad");
-  if (loop.retiredAt) add(loop.retiredAt, loop.level, `Retired${loop.retiredReason ? `: ${loop.retiredReason}` : ""}`, "bad");
-  for (const ev of events) if (EVENT_LABELS[ev.tool]) add(ev.at, null, EVENT_LABELS[ev.tool], "", `#${ev.id} · ${ev.actor}`);
+  for (const d of loop.drops || []) add(d.at, d.to, w("timeline.dropped", lvName(d.from), lvName(d.to), w("loop.drop")[d.cause] || ""), "bad");
+  if (loop.retiredAt) add(loop.retiredAt, loop.level, w("timeline.retired", loop.retiredReason), "bad");
+  const labels = w("loop.events");
+  for (const ev of events) if (labels[ev.tool]) add(ev.at, null, labels[ev.tool], "", `#${ev.id} · ${ev.actor}`);
   const day = (it) => it.at.slice(0, 10);
   return items.sort((a, z) => (day(a) === day(z) ? z.i - a.i : day(a) < day(z) ? 1 : -1));
 }
@@ -1154,17 +1275,18 @@ const timelineItem = (it) => {
 
 function timelineList(id, items, shown) {
   const rest = items.slice(shown);
+  const all = esc(w("loop.showAll", items.length));
   const more = rest.length
     ? `<div class="reveal"><div><ol class="timeline">${rest.map(timelineItem).join("")}</ol></div></div>
-<p class="tl-foot"><button class="more-btn" type="button" data-expand="${id}" data-more="SHOW ALL ${items.length}" data-less="SHOW LESS" aria-expanded="false" aria-controls="${id}">SHOW ALL ${items.length}</button></p>`
+<p class="tl-foot"><button class="more-btn" type="button" data-expand="${id}" data-more="${all}" data-less="${esc(w("loop.showLess"))}" aria-expanded="false" aria-controls="${id}">${all}</button></p>`
     : "";
   return `<ol class="timeline">${items.slice(0, shown).map(timelineItem).join("")}</ol>${more}`;
 }
 
 const TIMELINE_SHOWN = 5;
 function timelineSection(items) {
-  if (!items.length) return `<section class="block"><h2 class="title">TIMELINE</h2><p class="muted">Nothing has happened to this loop yet.</p></section>`;
-  return `<section class="block" id="timeline"><h2 class="title">TIMELINE</h2>${timelineList("timeline", items, TIMELINE_SHOWN)}</section>`;
+  if (!items.length) return `<section class="block"><h2 class="title">${w("loop.timeline")}</h2><p class="muted">${w("loop.nothingYet")}</p></section>`;
+  return `<section class="block" id="timeline"><h2 class="title">${w("loop.timeline")}</h2>${timelineList("timeline", items, TIMELINE_SHOWN)}</section>`;
 }
 
 function costSection(loop, owner) {
@@ -1174,132 +1296,113 @@ function costSection(loop, owner) {
   const hours = b?.hoursPerWeek ?? est?.hoursPerWeek;
   const score = triageScore(t);
   const group = triageGroup(loop);
-  const summary = [
-    hours != null && `${hours} h a week`,
-    b?.moneyUsd != null && `$${b.moneyUsd}`,
-    score != null && `score ${score}${group ? `, ${GROUP_WORD[group]}` : ""}`,
-  ].filter(Boolean);
+  const groupWord = group ? w("loop.group")[group] : "";
+  const confidence = (c) => w("cost.confidence")[c] || c;
+  const summary = [hours != null && w("cost.perWeek", hours), b?.moneyUsd != null && `$${b.moneyUsd}`, score != null && w("cost.score", score, groupWord)].filter(Boolean);
   const evidence = owner && loop.evidence;
   if (!summary.length && !evidence) return "";
   const rows = [];
   const row = (k, v) => rows.push(`<div><dt>${k}</dt><dd>${v}</dd></div>`);
-  if (hours != null) row("HOURS A WEEK", `${esc(hours)}${est?.howOften ? ` · ${esc(est.howOften)}` : ""}`);
-  if (b?.moneyUsd != null) row("MONEY", `$${esc(b.moneyUsd)}`);
-  if (b?.occurrences != null) row("MEASURED", `${esc(b.occurrences)} times, ${esc(b.confidence)} confidence`);
-  if (evidence) row("EVIDENCE", `${esc(loop.evidence)}<span class="private">PRIVATE</span>`);
-  const source = b?.approvedAt
-    ? `From the measured cost approved ${shortDate(b.approvedAt)}.`
-    : b
-      ? "From the measured cost."
-      : est
-        ? "From the estimate. A measured cost replaces it."
-        : "";
+  const howOften = txt(est?.howOften);
+  if (hours != null) row(w("cost.hours"), `${esc(hours)}${howOften ? ` · ${esc(howOften)}` : ""}`);
+  if (b?.moneyUsd != null) row(w("cost.money"), `$${esc(b.moneyUsd)}`);
+  if (b?.occurrences != null) row(w("cost.measured"), esc(w("cost.measuredTimes", b.occurrences, confidence(b.confidence))));
+  if (evidence) row(w("cost.evidence"), `${esc(loop.evidence)}<span class="private">${w("cost.private")}</span>`);
+  const source = b?.approvedAt ? w("cost.fromApproved", shortDate(b.approvedAt)) : b ? w("cost.fromMeasured") : est ? w("cost.fromEstimate") : "";
   const cost = rows.length
-    ? `<div><h2 class="title">COST</h2><dl class="status">${rows.join("")}</dl>${source ? `<p class="source">${source}</p>` : ""}</div>`
+    ? `<div><h2 class="title">${w("cost.title")}</h2><dl class="status">${rows.join("")}</dl>${source ? `<p class="source">${source}</p>` : ""}</div>`
     : "";
   let triage = "";
   if (t) {
     const pips = (v) => Array.from({ length: P.triage.max }, (_, i) => `<i${i < v ? ' class="on"' : ""}></i>`).join("");
-    const measured = b?.hoursPerWeek != null ? "Measured" : "Estimated";
     const known = {
-      time: hours != null && `${measured}: ${esc(hours)} h a week.`,
-      frequency: est?.howOften && `Estimated: ${esc(est.howOften)}.`,
+      time: hours != null && w("cost.known", w(b?.hoursPerWeek != null ? "cost.measuredWord" : "cost.estimatedWord"), esc(hours)),
+      frequency: howOften && w("cost.howOften", esc(howOften)),
     };
     const list = P.triage.criteria
       .map((k) => {
-        const word = CRITERIA_WORD[k] || k.toUpperCase();
-        const note = CRITERIA_NOTE[k]
-          ? noteButton(
-              `${CRITERIA_NOTE[k]} <b>This loop: ${esc(t[k])} of ${P.triage.max}.${known[k] ? ` ${known[k]}` : ""}</b>`,
-              `What ${word.toLowerCase()} means`
-            )
-          : "";
+        const word = w("loop.criteria")[k] || k.toUpperCase();
+        const about = w("loop.criteriaNote")[k];
+        const note = about ? noteButton(`${about} <b>${w("cost.thisLoop", esc(t[k]), P.triage.max)}${known[k] ? ` ${known[k]}` : ""}</b>`, w("cost.whatMeans", word)) : "";
         return `<li${k === "risk" ? ' class="risk"' : ""}><span class="lbl"><span class="k">${word}</span>${note}</span><span class="pips">${pips(t[k])}</span><span class="v">${k === "risk" ? "\u2212" : ""}${esc(t[k])}</span></li>`;
       })
       .join("");
     const { minScore, maxRisk } = P.triage.automateNow;
     const why =
       group === "automateNow"
-        ? `Score ${minScore} or more and risk ${maxRisk} or less put it in Automate now.`
+        ? w("cost.whyAuto", minScore, maxRisk)
         : group === "notYet"
           ? t.risk >= P.triage.notYet.minRisk
-            ? `Risk ${P.triage.notYet.minRisk} or more puts it in Not yet.`
-            : "It's at its limit, so it's in Not yet."
-          : `Automate now needs a score of ${minScore} or more and risk ${maxRisk} or less.`;
-    triage = `<div><h2 class="title">SCORE</h2><ul class="triage">${list}</ul><p class="why">Score ${score}, ${GROUP_WORD[group]}. ${why}${t.source ? ` Scored from the ${esc(SOURCE_WORD[t.source] || t.source)}.` : ""}</p></div>`;
+            ? w("cost.whyRisk", P.triage.notYet.minRisk)
+            : w("cost.whyLimit")
+          : w("cost.whyNeeds", minScore, maxRisk);
+    const from = t.source ? w("cost.scoredFrom", esc(w("loop.source")[t.source] || t.source)) : "";
+    triage = `<div><h2 class="title">${w("cost.scoreTitle")}</h2><ul class="triage">${list}</ul><p class="why">${w("cost.scoreLine", score, groupWord, why)}${from}</p></div>`;
   }
-  return `<section class="block"><details class="card disclosure"><summary><span><b>Cost and score</b><small>${esc(summary.join(" · ") || "Evidence")}</small></span><span class="disclosure-toggle" data-closed="MORE DETAILS" data-open="HIDE DETAILS"></span></summary><div class="disclosure-body"><div class="two">${cost}${triage}</div></div></details></section>`;
+  return `<section class="block"><details class="card disclosure"><summary><span><b>${w("cost.summaryTitle")}</b><small>${esc(summary.join(" · ") || w("cost.evidenceWord"))}</small></span><span class="disclosure-toggle" data-closed="${esc(w("cost.more"))}" data-open="${esc(w("cost.hide"))}"></span></summary><div class="disclosure-body"><div class="two">${cost}${triage}</div></div></details></section>`;
 }
 
-// Every owner action is a prompt for the AI app: the page itself never writes.
+// Every owner action is a prompt for the AI app: the page itself never writes. Items: { id, label, prompt }, or null for a separator.
 function loopActions(loop, exps, name, areaName, version) {
   const who = `${loop.code}, ${name}`;
   const items = [];
-  const add = (label, prompt) => items.push([label, `Use Onhundred to ${prompt}`]);
+  const add = (id, ...args) => items.push({ id, label: w(`actions.labels.${id}`), prompt: w(`actions.prompts.${id}`, who, ...args) });
   const open = exps.find((e) => !e.conclusion);
   const t = open && byStage(open).at(-1);
   const level = lvIdx(loop.level);
   const measured = isMeasured(loop);
   if (loop.level === "still" && !measured && !loop.pendingBaseline) {
-    if (loop.flag !== "measuring") add("Start measuring", `start measuring ${who}. Call set_measuring, then tell me what you'll watch and how you'll count each time it happens.`);
-    add("Record the measured cost", `record what ${who} costs today. It needs to be watched at least ${P.limits.occurrencesToMeasure} times. Ask me the hours a week and what it costs, then call record_baseline.`);
+    if (loop.flag !== "measuring") add("startMeasuring");
+    add("recordCost", P.limits.occurrencesToMeasure);
   }
-  if (open && t?.outcome == null && t)
-    add("End the running round", `end the running round of ${open.code} for ${who}. Ask me whether it passed, didn't pass or was stopped, and what it really cost, then call close_stage_try.`);
-  else if (open && t?.outcome === "achieved" && !t.hold)
-    add("Record the proving", `record whether ${open.code} held for ${who} over ${P.limits.holdWeeks} weeks of proving. Ask me whether it kept passing, then call record_hold.`);
+  if (open && t?.outcome == null && t) add("endRound", open.code);
+  else if (open && t?.outcome === "achieved" && !t.hold) add("recordProving", open.code);
   else if (open) {
-    add("Start the next round", `write the next round of ${open.code} for ${who}. Call get_experiment first. Write the approach, the goals and the deadline, show them to me, then call register_stage_try.`);
-    add("End the experiment", `end ${open.code} for ${who}. Call get_experiment, tell me whether the bet was right, wrong or not clear, and wait for my answer before conclude_experiment.`);
+    add("nextRound", open.code);
+    add("endExperiment", open.code);
   } else if ((measured || estimateCanStart(version)) && level < lvIdx(ceilingOf(loop))) {
-    const cost = measured || loop.estimate?.hoursPerWeek ? "" : " It has no estimated cost yet: ask me for one and call update_loop first.";
-    add(
-      "Draft an experiment",
-      `draft an experiment for ${who}. It's at ${levelName(loop.level)}. Call get_loop and suggest_slots first, and aim for ${levelName(LEVELS[level + 1])}.${cost} Write the question and the bet (If, then, because) following onhundred://docs/voice. Show me both before you call register_experiment.`
-    );
+    const cost = measured || loop.estimate?.hoursPerWeek ? "" : w("actions.prompts.noEstimate");
+    add("draft", lvName(loop.level), lvName(LEVELS[level + 1]), cost);
   }
   if (level >= lvIdx("assisted")) {
-    add("Record a drop", `record a drop for ${who}. Ask me what failed and for how many days, then call record_drop with the cause and a private note.`);
-    add("Stop it now", `stop ${who}, now. Someone was harmed or withdrew consent. Call record_drop so it goes straight back to ${levelName("still")}, then ask me what happened for the private note.`);
+    add("recordDrop");
+    add("stopNow", lvName("still"));
   }
   if (items.length) items.push(null);
-  add("Rename", `rename ${who}. Read onhundred://docs/loops and onhundred://docs/voice, propose 3 names in every language of the log, and wait for my pick before rename_loop.`);
-  add(
-    "Write the scope",
-    `write the scope for ${who}. Read onhundred://docs/loops and onhundred://docs/voice. Ask whether a neighbor loop could be confused with it. If yes, propose a scope in every language of the log (what counts, what doesn't, fixed constraints). If not, explain why none is needed. Wait for my pick before rename_loop.`
-  );
-  add("Update the estimate", `update the estimate and score of ${who}. Ask me what changed, then call update_loop.`);
-  add("Split", `split ${who}, into smaller loops. Read onhundred://docs/loops, propose the new loops, and ask me whether the measured cost still applies before split_loop.`);
-  add("Merge", `merge ${who}, with another ${areaName} loop. Show me the candidates and the merged name before merge_loops.`);
-  add("Retire", `retire ${who}. Ask me why, then call retire_loop with that reason.`);
+  add("rename");
+  add("scope");
+  add("estimate");
+  add("split");
+  add("merge", areaName);
+  add("retire");
   return items;
 }
 
-function askMenu(loop, exps, name, areaName, connected, version) {
-  if (!connected) return `<a class="btn signal" href="/connect">CONNECT YOUR AI</a>`;
-  const items = loopActions(loop, exps, name, areaName, version)
-    .map((it) =>
-      it
-        ? `<button class="menu-item" type="button" data-loop-prompt="${esc(it[1])}" data-title="${esc(it[0][0].toLowerCase() + it[0].slice(1))}">${esc(it[0].toUpperCase())}</button>`
+function askMenu(actions, connected) {
+  if (!connected) return `<a class="btn signal" href="/connect">${w("common.connectAi")}</a>`;
+  const items = actions
+    .map((a) =>
+      a
+        ? `<button class="menu-item" type="button" data-loop-prompt="${esc(a.prompt)}" data-title="${esc(lowerFirst(a.label))}">${esc(a.label.toUpperCase())}</button>`
         : `<span class="menu-sep" role="separator"></span>`
     )
     .join("");
-  return `<details class="menu ask" data-menu><summary class="btn signal"><span class="btn-stack">NEXT ACTIONS<small>Ask your agent</small></span>${CARET_ICON}</summary><div class="menu-list">${items}</div></details>`;
+  return `<details class="menu ask" data-menu><summary class="btn signal"><span class="btn-stack">${w("loop.nextActions")}<small>${w("loop.askAgent")}</small></span>${CARET_ICON}</summary><div class="menu-list">${items}</div></details>`;
 }
 
 const loopPromptDialog = (code, name) => `<dialog class="modal" data-dialog data-loop-prompt-dialog aria-labelledby="loop-prompt-title">
-<h3 id="loop-prompt-title">Ask your agent to <span data-prompt-title></span></h3>
-<p class="modal-loop">${esc(code)} · ${esc(name)}. Edit the prompt if you like, then open it in your AI app, or copy it into any chat connected to your log.</p>
+<h3 id="loop-prompt-title">${w("loop.askTo")} <span data-prompt-title></span></h3>
+<p class="modal-loop">${w("loop.promptIntro", esc(code), esc(name))}</p>
 <div class="copy block-code">${promptBox("loop-prompt")}</div>
-<div class="actions"><button class="btn" type="button" data-dialog-close>CANCEL</button>${promptMenu("#loop-prompt", null, { up: true })}</div>
+<div class="actions"><button class="btn" type="button" data-dialog-close>${w("common.cancel")}</button>${promptMenu("#loop-prompt", null, { up: true })}</div>
 </dialog>`;
 
 // Null when nobody may see a loop with this code: the route answers 404.
-export function loopPage({ state, owner, viewOnly = false, code, events = [], connected = false, url, share = null }) {
+export function loopPage({ state, lang, owner, viewOnly = false, code, events = [], connected = false, url, share = null }) {
   const p = parseCode(code);
   if (!p) return null;
   const meta = state.meta;
-  const lang = meta.languages[0];
+  usePage(meta, lang, { tags: owner });
   const view = owner ? derive(state) : publicView(state);
   let loop = view.loops.find((l) => l.code === code);
   if (!loop && owner) {
@@ -1308,11 +1411,10 @@ export function loopPage({ state, owner, viewOnly = false, code, events = [], co
   }
   if (!loop) return null;
   const today = new Date().toISOString().slice(0, 10);
-  const branch = P.branches[p.branch];
-  const areaName = branch?.areas[p.area] || p.area;
-  const name = loop.private ? "Private loop" : pickText(loop.name, lang);
-  const done = loop.private ? "" : pickText(loop.doneWhen, lang);
-  const scope = loop.private ? "" : pickText(loop.scope, lang);
+  const areaName = areaLabel(p.areaCode);
+  const name = loop.private ? w("loop.private") : txt(loop.name);
+  const done = loop.private ? "" : shown(loop.doneWhen);
+  const scope = loop.private ? "" : shown(loop.scope);
   const exps = view.experiments
     .filter((e) => e.loops.includes(code))
     .sort((a, z) => (a.registeredAt === z.registeredAt ? (a.code < z.code ? 1 : -1) : a.registeredAt < z.registeredAt ? 1 : -1));
@@ -1320,20 +1422,21 @@ export function loopPage({ state, owner, viewOnly = false, code, events = [], co
   const area = view.loops.filter((l) => l.code.startsWith(p.areaCode + "-")).map((l) => ({ code: l.code, n: parseCode(l.code).n }));
   const prev = area.filter((l) => l.n < p.n).sort((a, z) => z.n - a.n)[0];
   const next = area.filter((l) => l.n > p.n).sort((a, z) => a.n - z.n)[0];
-  const step = (l, word) => (l ? `<a href="/loop/${esc(l.code)}" rel="${word.toLowerCase()}">${word} · ${esc(l.code)}</a>` : `<span aria-disabled="true">${word}</span>`);
-  const crumbs = `<nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/">LOG</a></li><li>${esc((branch?.name || p.branch).toUpperCase())}</li><li>${esc(areaName.toUpperCase())}</li><li aria-current="page">${esc(code)}</li></ol><span class="stepper">${step(prev, "PREV")}${step(next, "NEXT")}</span></nav>`;
+  const step = (l, rel, word) => (l ? `<a href="/loop/${esc(l.code)}" rel="${rel}">${word} · ${esc(l.code)}</a>` : `<span aria-disabled="true">${word}</span>`);
+  const crumbs = `<nav class="crumbs" aria-label="${esc(w("loop.crumbs"))}"><ol><li><a href="/">${w("loop.log")}</a></li><li>${esc(branchName(p.branch).toUpperCase())}</li><li>${esc(areaName.toUpperCase())}</li><li aria-current="page">${esc(code)}</li></ol><span class="stepper">${step(prev, "prev", w("loop.prev"))}${step(next, "next", w("loop.next"))}</span></nav>`;
 
   const actionable = owner && !viewOnly && !loop.retired && !loop.proposed;
-  const head = `<section class="loop-head"><div><h1>${esc(name)}</h1>${done ? `<p class="done"><span class="label">DONE WHEN</span>${esc(done)}</p>` : ""}${scope ? `<p class="scope"><span class="label">SCOPE</span>${esc(scope)}</p>` : ""}${loop.private ? `<p class="done">This loop stays private until the person in it agrees to publish it.</p>` : ""}</div>${actionable ? `<div class="head-side">${askMenu(loop, exps, name, areaName, connected, logVersion(meta))}</div>` : ""}</section>`;
+  const actions = actionable ? loopActions(loop, exps, name, areaName, logVersion(meta)) : null;
+  const head = `<section class="loop-head"><div><h1>${loop.private ? esc(name) : shown(loop.name)}</h1>${done ? `<p class="done"><span class="label">${w("loop.doneWhen")}</span>${done}</p>` : ""}${scope ? `<p class="scope"><span class="label">${w("loop.scope")}</span>${scope}</p>` : ""}${loop.private ? `<p class="done">${w("loop.privateNote")}</p>` : ""}</div>${actionable ? `<div class="head-side">${askMenu(actions, connected)}</div>` : ""}</section>`;
 
   const notices = [];
-  if (loop.retired) notices.push(notice(`Retired ${esc(upDate(loop.retiredAt))}${loop.retiredReason ? `: ${esc(loop.retiredReason)}` : ""}. Only you can see this page, and the code is never reused.`, "bad"));
-  if (loop.proposed) notices.push(notice(`Proposed and waiting for your approval on the <a href="/">log page</a>. Only you can see it until then.`));
-  if (owner && loop.pending && !loop.retired) notices.push(notice(`New text is waiting for your approval on the <a href="/">log page</a>.`));
+  if (loop.retired) notices.push(notice(w("loop.retired", esc(upDate(loop.retiredAt)), loop.retiredReason ? esc(loop.retiredReason) : ""), "bad"));
+  if (loop.proposed) notices.push(notice(w("loop.proposed")));
+  if (owner && loop.pending && !loop.retired) notices.push(notice(w("loop.pendingText")));
 
   const measuringFull = view.loops.filter((l) => l.flag === "measuring").length >= P.limits.measuringSlots;
   const next_ = nextLine(loop, exps, owner, today, measuringFull, logVersion(meta));
-  const status = `<section class="status-block"><div class="status-row">${levelStack(loop, exps)}${experimentsBox(exps)}</div>${next_ ? `<p class="next-line"><span class="label">NEXT</span>${esc(next_)}</p>` : ""}</section>`;
+  const status = `<section class="status-block"><div class="status-row">${levelStack(loop, exps)}${experimentsBox(exps)}</div>${next_ ? `<p class="next-line"><span class="label">${w("loop.nextLabel")}</span>${esc(next_).replace(START_LINK, startLink())}</p>` : ""}</section>`;
 
   const body = `<div class="loop-page">
 ${flash(url)}${share ? shareBanner(share) : ""}${viewOnly ? viewOnlyNotice() : ""}${notices.join("")}
@@ -1343,73 +1446,76 @@ ${status}
 ${timelineSection(loopTimeline(loop, exps, owner ? events : []))}
 ${costSection(loop, owner)}
 </div>
-${experimentsDrawer(code, exps, lang, today)}
+${experimentsDrawer(code, exps, today)}
+${levelDialogs(loop, exps, logVersion(meta), actions, connected)}
+${next_.includes(START_LINK) ? startExperimentDialog(loop, logVersion(meta), actions, connected) : ""}
 ${actionable && connected ? loopPromptDialog(code, name) : ""}`;
-  const title = `${code} ${name} · ${meta.ownerName ? `${meta.ownerName}: ` : ""}Onhundred Protocol log`;
-  return layout({ title, ownerName: meta.ownerName, owner: owner && !viewOnly, body, origin: url?.origin, ...shareOg(share) });
+  const title = w("site.pageTitle", `${code} ${name}`, meta.ownerName);
+  return layout({ title, meta, owner: owner && !viewOnly, body, origin: url?.origin, url, ...shareOg(share) });
 }
 
 // ---------------------------------------------------------------------------
 // Experiment page: public once the log is published, like a loop's page. Private fields never reach it.
 
 // Null when nobody may see an experiment with this code: the route answers 404.
-export function expPage({ state, owner, viewOnly = false, code, url, share = null }) {
+export function expPage({ state, lang, owner, viewOnly = false, code, url, share = null }) {
   const meta = state.meta;
-  const lang = meta.languages[0];
+  usePage(meta, lang, { tags: owner });
   const view = owner ? derive(state) : publicView(state);
   const e = view.experiments.find((x) => x.code === code);
   if (!e) return null;
   const today = new Date().toISOString().slice(0, 10);
-  const q = pickText(e.question, lang) || pickText(e.pending?.question, lang);
-  const bet = pickText(e.hypothesis, lang) || pickText(e.pending?.hypothesis, lang);
+  const q = txt(e.question) || txt(e.pending?.question);
+  const bet = expBet(e);
   const loopName = (c) => {
     const l = view.loops.find((x) => x.code === c);
-    return l?.private ? "Private loop" : pickText(l?.name, lang);
+    return l?.private ? esc(w("loop.private")) : shown(l?.name);
   };
-  const loops = e.loops
-    .map((c) => `<li class="row"><a class="code" href="/loop/${esc(c)}">${esc(c)}</a><span>${esc(loopName(c))}</span></li>`)
-    .join("");
-  const verdict = e.conclusion ? `<p class="exp-verdict"><span class="label">ENDED ${esc(upDate(e.conclusion.at))}</span>${esc(BET_WORD[e.conclusion.hypothesis] || "")}</p>` : "";
-  const odds = e.odds != null ? `<p class="exp-odds"><span class="label">ODDS</span>${esc(e.odds)} in 100 that the bet holds</p>` : "";
-  const crumbs = `<nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/">LOG</a></li><li>EXPERIMENTS</li><li aria-current="page">${esc(code)}</li></ol></nav>`;
+  const loops = e.loops.map((c) => `<li class="row"><a class="code" href="/loop/${esc(c)}">${esc(c)}</a><span>${loopName(c)}</span></li>`).join("");
+  const verdict = e.conclusion
+    ? `<p class="exp-verdict"><span class="label">${w("exp.ended", esc(upDate(e.conclusion.at)))}</span>${esc(w("exp.betWord")[e.conclusion.hypothesis] || "")}</p>`
+    : "";
+  const odds = e.odds != null ? `<p class="exp-odds"><span class="label">${w("exp.odds")}</span>${esc(w("exp.oddsText", e.odds))}</p>` : "";
+  const crumbs = `<nav class="crumbs" aria-label="${esc(w("loop.crumbs"))}"><ol><li><a href="/">${w("loop.log")}</a></li><li>${w("exp.crumb")}</li><li aria-current="page">${esc(code)}</li></ol></nav>`;
   const body = `<div class="loop-page exp-page">
 ${flash(url)}${share ? shareBanner(share) : ""}${viewOnly ? viewOnlyNotice() : ""}
 ${crumbs}
-<section class="loop-head"><div><p class="exp-id">${esc(code)} · ${esc(String(e.slot).toUpperCase())} PICK</p><h1>${esc(q)}</h1>${bet ? `<p class="done"><span class="label">BET</span>${esc(bet)}</p>` : ""}${odds}${verdict}</div></section>
-<section class="block"><h2 class="title">LOOPS</h2><ul class="plain">${loops}</ul></section>
-<section class="block"><h2 class="title">ROUNDS</h2><ul class="exps">${experimentItem(e, lang, today)}</ul></section>
+<section class="loop-head"><div><p class="exp-id">${esc(code)} · ${esc(w("exp.pick", e.slot))}</p><h1>${expQuestion(e)}</h1>${bet ? `<p class="done"><span class="label">${w("exp.bet")}</span>${bet}</p>` : ""}${odds}${verdict}</div></section>
+<section class="block"><h2 class="title">${w("exp.loops")}</h2><ul class="plain">${loops}</ul></section>
+<section class="block"><h2 class="title">${w("exp.rounds")}</h2><ul class="exps">${experimentItem(e, today)}</ul></section>
 </div>`;
-  const title = `${code} ${q} · ${meta.ownerName ? `${meta.ownerName}: ` : ""}Onhundred Protocol log`;
-  return layout({ title, ownerName: meta.ownerName, owner: owner && !viewOnly, body, origin: url?.origin, ...shareOg(share) });
+  const title = w("site.pageTitle", `${code} ${q}`, meta.ownerName);
+  return layout({ title, meta, owner: owner && !viewOnly, body, origin: url?.origin, url, ...shareOg(share) });
 }
 
 // ---------------------------------------------------------------------------
 // Share cards. share: { card, lang, languages, headline, image, urls, images, post, running, owner } from the worker.
 
 const START_URL = "https://onhundred.com";
-const shareOg = (share) => (share ? { ogImage: share.image, ogTitle: share.headline, ogDescription: share.running ? "Guess how it ends." : "Start your 10." } : {});
+const shareOg = (share) => (share ? { ogImage: share.image, ogTitle: share.headline, ogDescription: w(share.running ? "share.ogRunning" : "share.ogStart") } : {});
 
 const postImagesTools = (share) => {
   if (share.post === "ready")
-    return `<p class="share-downloads"><span class="label">TO POST</span>${share.images.map((i) => `<a class="btn small" href="${esc(i.url)}" download>${esc(i.label)}</a>`).join("")}</p>`;
-  if (share.post === "queued") return `<p class="muted">Images to post are on the way. Reload in a minute.</p>`;
+    return `<p class="share-downloads"><span class="label">${w("share.toPost")}</span>${share.images.map((i) => `<a class="btn small" href="${esc(i.url)}" download>${esc(i.label)}</a>`).join("")}</p>`;
+  if (share.post === "queued") return `<p class="muted">${w("share.imagesComing")}</p>`;
   if (!share.owner) return "";
-  return `<form method="post" action="/owner/action" class="share-post"><input type="hidden" name="op" value="card_images"><input type="hidden" name="id" value="${esc(share.card.id)}"><input type="hidden" name="next" value="${esc(share.next || "/")}"><button class="btn small" type="submit">GET IMAGES TO POST (SQUARE AND STORY)</button></form>`;
+  return `<form method="post" action="/owner/action" class="share-post"><input type="hidden" name="op" value="card_images"><input type="hidden" name="id" value="${esc(share.card.id)}"><input type="hidden" name="next" value="${esc(share.next || "/")}"><button class="btn small" type="submit">${w("share.getImages")}</button></form>`;
 };
 
 const copyLinks = (share) =>
   Object.entries(share.urls)
     .map(([lang, u]) => {
       const id = `card-url-${share.card.id}-${lang}`;
-      return `<div class="copy"><span class="copy-field"><span class="copy-label">LINK${Object.keys(share.urls).length > 1 ? ` · ${esc(lang.toUpperCase())}` : ""}</span><code id="${esc(id)}">${esc(u)}</code></span><button class="btn" type="button" data-copy="#${esc(id)}" data-card-copied="${esc(share.card.id)}">COPY</button></div>`;
+      return `<div class="copy"><span class="copy-field"><span class="copy-label">${w("share.link")}${Object.keys(share.urls).length > 1 ? ` · ${esc(lang.toUpperCase())}` : ""}</span><code id="${esc(id)}">${esc(u)}</code></span><button class="btn" type="button" data-copy="#${esc(id)}" data-card-copied="${esc(share.card.id)}">${w("common.copy")}</button></div>`;
     })
     .join("");
 
+const shareCta = (share) => w(share.running ? "share.guess" : "share.start");
+
 // The banner a visitor sees on the page a card links to. The owner also gets the card's tools.
 function shareBanner(share) {
-  const cta = share.running ? "GUESS HOW IT ENDS" : "START YOUR 10";
   const tools = share.owner ? `<div class="share-tools">${copyLinks(share)}${postImagesTools(share)}</div>` : "";
-  return `<aside class="share-banner" aria-label="Shared card"><p class="share-headline">${esc(share.headline)}</p><a class="btn signal small" href="${START_URL}" rel="noopener">${cta}</a>${tools}</aside>`;
+  return `<aside class="share-banner" aria-label="${esc(w("share.banner"))}"><p class="share-headline">${esc(share.headline)}</p><a class="btn signal small" href="${START_URL}" rel="noopener">${shareCta(share)}</a>${tools}</aside>`;
 }
 
 // The owner's log page: cards with a link nobody copied yet, from the last 2 weeks.
@@ -1420,69 +1526,66 @@ function readyPanel(shares) {
         `<li class="share-ready-item"><img src="${esc(s.imagePath)}" alt="" width="300" height="158" loading="lazy"><div><p class="share-headline">${esc(s.headline)}</p>${copyLinks(s)}${postImagesTools(s)}</div></li>`
     )
     .join("");
-  return `<section class="block share-ready" aria-labelledby="share-ready-title"><h2 class="title" id="share-ready-title"><mark>YOUR CARD IS READY</mark></h2><p class="muted">Copy a link to share it. The preview shows the card. Only what your public page shows is on it.</p><ul class="plain">${items}</ul></section>`;
+  return `<section class="block share-ready" aria-labelledby="share-ready-title"><h2 class="title" id="share-ready-title"><mark>${w("share.ready")}</mark></h2><p class="muted">${w("share.readyNote")}</p><ul class="plain">${items}</ul></section>`;
 }
 
 // The standalone card page: for links from a private log. It never links to the rest of the log.
-export function cardPage({ meta, share, origin }) {
-  const f = share.card.facts;
-  const lines = cardLines(f, share.lang);
+export function cardPage({ meta, lang, share, origin }) {
+  usePage(meta, lang || share.lang, { tags: share.owner });
+  const lines = cardLines(share.card.facts);
   const body = `<section class="block share-page">
 <img class="share-image" src="${esc(share.imagePath)}" alt="${esc(share.headline)}" width="1200" height="630">
 <h1>${esc(share.headline)}</h1>
 <ul class="plain share-facts">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
-<p><a class="btn signal" href="${START_URL}" rel="noopener">${share.running ? "GUESS HOW IT ENDS" : "START YOUR 10"}</a></p>
+<p><a class="btn signal" href="${START_URL}" rel="noopener">${shareCta(share)}</a></p>
 ${share.owner ? `<div class="share-tools">${copyLinks(share)}${postImagesTools(share)}</div>` : postImagesTools(share)}
 </section>`;
-  return layout({ title: share.headline, ownerName: meta.ownerName, signedIn: share.owner, body, origin, ...shareOg(share) });
+  return layout({ title: share.headline, meta, signedIn: share.owner, body, origin, ...shareOg(share) });
 }
 
-// The plain facts a card shows under its headline, in 1 language.
-function cardLines(f, lang) {
+// The plain facts a card shows under its headline, in the page's language.
+function cardLines(f) {
   const out = [];
-  if (f.loop) out.push(`${f.loop.code} · ${pickText(f.loop.name, lang)} · ${f.loop.levelName?.[lang] || levelName(f.loop.level, lang)}`);
+  if (f.loop) out.push(`${f.loop.code} · ${txt(f.loop.name)} · ${f.loop.levelName?.[LANG] || lvName(f.loop.level)}`);
   if (f.experiment) {
     const x = f.experiment;
-    out.push(`${x.code} · ${pickText(x.question, lang)}`);
-    if (x.hypothesis) out.push(`Bet: ${pickText(x.hypothesis, lang)}`);
-    if (x.odds != null) out.push(`Odds: ${x.odds} in 100`);
+    out.push(`${x.code} · ${txt(x.question)}`);
+    if (x.hypothesis) out.push(w("share.bet", txt(x.hypothesis)));
+    if (x.odds != null) out.push(w("share.odds", x.odds));
   }
   const hours = f.loop?.hours || f.experiment?.loops?.find((l) => l.hours)?.hours;
-  if (hours) out.push(`${hours.perWeek} h a week (${hours.source})`);
-  out.push(`${f.handedOff} loops handed off · ${f.points} of ${f.total} points`);
+  if (hours) out.push(w("share.hours", hours.perWeek, w("share.source")[hours.source] || hours.source));
+  out.push(w("share.handedOff", f.handedOff, f.points, f.total));
   return out;
 }
 
 export { cardRenderPage } from "./card-render.mjs";
 
-export function privatePage({ meta, origin, configured: isConfigured, hasConnections, preview = false }) {
+export function privatePage({ meta, lang, origin, configured: isConfigured, hasConnections, preview = false }) {
+  usePage(meta, lang);
   const body = `${preview ? previewNotice() : ""}${!isConfigured ? setupNotice() : ""}
 <section class="block hero-private">
-<h1>This log is private.</h1>
-<p>Only its owner can see it. Agents connect at the MCP address below.</p>
+<h1>${w("privatePage.title")}</h1>
+<p>${w("privatePage.text")}</p>
 ${mcpUrlBox(origin)}
-<p><a class="btn signal" href="/login">SIGN IN</a></p>
-${!hasConnections ? `<p class="muted">First time here? Sign in with the owner password you chose when you deployed, then connect your first AI app.</p>` : ""}
+<p><a class="btn signal" href="/login">${w("notices.signIn")}</a></p>
+${!hasConnections ? `<p class="muted">${w("privatePage.firstTime")}</p>` : ""}
 </section>`;
-  return layout({ title: "Onhundred Protocol log", ownerName: meta.ownerName, signedIn: preview, body, origin });
+  return layout({ title: w("site.logTitle"), meta, signedIn: preview, body, origin });
 }
 
-function setupNotice() {
-  return notice(
-    "Sign-in is off: OWNER_PASSWORD or COOKIE_ENCRYPTION_KEY is missing. Add both as secrets in your Worker's settings (Settings, Variables and Secrets). COOKIE_ENCRYPTION_KEY needs 32 characters or more: <code>openssl rand -hex 32</code>.",
-    "bad"
-  );
-}
+const setupNotice = () => notice(w("notices.setup"), "bad");
 
 // ---------------------------------------------------------------------------
 // Onboarding
 
 const mcpUrlBox = (origin) =>
-  `<div class="copy"><span class="copy-field"><span class="copy-label">MCP SERVER</span><code id="mcp-url">${esc(origin)}/mcp</code></span><button class="btn" type="button" data-copy="#mcp-url">COPY</button></div>`;
+  `<div class="copy"><span class="copy-field"><span class="copy-label">${w("connect.mcpServer")}</span><code id="mcp-url">${esc(origin)}/mcp</code></span><button class="btn" type="button" data-copy="#mcp-url">${w("common.copy")}</button></div>`;
 
-const codeBlock = (id, text) => `<div class="copy block-code"><pre id="${id}">${esc(text)}</pre><button class="btn" type="button" data-copy="#${id}">COPY</button></div>`;
+const codeBlock = (id, text) => `<div class="copy block-code"><pre id="${id}">${esc(text)}</pre><button class="btn" type="button" data-copy="#${id}">${w("common.copy")}</button></div>`;
 
-export function connectPage({ meta, origin }) {
+export function connectPage({ meta, lang, origin }) {
+  usePage(meta, lang);
   const url = `${origin}/mcp`;
   const steps = (items) => `<ol class="steps">${items.map((s) => `<li>${s}</li>`).join("")}</ol>`;
   const claudeInstall = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Onhundred&connectorUrl=${encodeURIComponent(url)}`;
@@ -1491,7 +1594,7 @@ export function connectPage({ meta, origin }) {
   -H "Content-Type: application/json" \\
   -d '{
     "model": "grok-4",
-    "input": "Call get_state and tell me where my log stands.",
+    "input": ${JSON.stringify(w("connect.xaiInput"))},
     "tools": [{
       "type": "mcp",
       "server_label": "onhundred",
@@ -1512,120 +1615,111 @@ export function connectPage({ meta, origin }) {
   "authorization_token": "YOUR_ONHUNDRED_API_KEY"
 }]`;
   const body = `<section class="block">
-<h1>Connect your AI Agent</h1>
-<p>It takes 2 minutes to connect and get your AI agent to help you automate your life. You control what is public, and your agent will always ask for your permission.</p>
+<h1>${w("connect.title")}</h1>
+<p>${w("connect.intro")}</p>
 ${mcpUrlBox(origin)}
 </section>
 <section class="block cards">
-<article class="card"><h3>Claude</h3>${steps([
-    "In claude.ai or the desktop app, open Customize, then Connectors.",
-    "Choose Add custom connector. Name it Onhundred and paste the address above.",
-    "Click Connect, sign in with your owner password and allow access.",
-  ])}<div class="card-action"><p class="muted">Opens claude.ai with the name and address filled in. Check them and click Add.</p><a class="btn signal" href="${esc(claudeInstall)}" target="_blank" rel="noopener">ADD TO CLAUDE</a></div></article>
-<article class="card"><h3>ChatGPT</h3>${steps([
-    "Open Settings, then Apps. Custom apps depend on your plan; on some plans you turn on Developer mode first.",
-    "Create an app, paste the address above and choose OAuth.",
-    "Sign in with your owner password and allow access.",
-  ])}<div class="card-action"><p class="muted">Copies the address and opens ChatGPT. ChatGPT can't fill in the form, so paste it when you create the app.</p><a class="btn signal" href="https://chatgpt.com/plugins" target="_blank" rel="noopener" data-copy="#mcp-url">ADD TO CHATGPT</a></div></article>
-<article class="card"><h3>Grok</h3>${steps([
-    "In grok.com, open Connectors and choose New Connector, then Custom.",
-    "Paste the address above.",
-    "Sign in with your owner password and allow access.",
-  ])}<div class="card-action"><p class="muted">Copies the address and opens Grok connectors. On Grok Business, a team admin adds the connector in console.x.ai first.</p><a class="btn signal" href="https://grok.com/connectors" target="_blank" rel="noopener" data-copy="#mcp-url">ADD TO GROK</a></div></article>
+<article class="card"><h3>Claude</h3>${steps(w("connect.claudeSteps"))}<div class="card-action"><p class="muted">${w("connect.claudeNote")}</p><a class="btn signal" href="${esc(claudeInstall)}" target="_blank" rel="noopener">${w("connect.claudeAdd")}</a></div></article>
+<article class="card"><h3>ChatGPT</h3>${steps(w("connect.chatgptSteps"))}<div class="card-action"><p class="muted">${w("connect.chatgptNote")}</p><a class="btn signal" href="https://chatgpt.com/plugins" target="_blank" rel="noopener" data-copy="#mcp-url">${w("connect.chatgptAdd")}</a></div></article>
+<article class="card"><h3>Grok</h3>${steps(w("connect.grokSteps"))}<div class="card-action"><p class="muted">${w("connect.grokNote")}</p><a class="btn signal" href="https://grok.com/connectors" target="_blank" rel="noopener" data-copy="#mcp-url">${w("connect.grokAdd")}</a></div></article>
 </section>
 <section class="block">
-${sectionTitle(API_ICON, "API ALTERNATIVE IF YOU CAN'T CONNECT THROUGH THE MCP SERVER")}
+${sectionTitle(API_ICON, w("connect.apiTitle"))}
 <details class="card disclosure">
-<summary><span><b>Connect an agent with an API key</b><small>Agents that call an API send an API key instead of signing in.</small></span><span class="disclosure-toggle" data-closed="MORE DETAILS" data-open="HIDE DETAILS"></span></summary>
+<summary><span><b>${w("connect.apiSummary")}</b><small>${w("connect.apiSummaryNote")}</small></span><span class="disclosure-toggle" data-closed="${esc(w("cost.more"))}" data-open="${esc(w("cost.hide"))}"></span></summary>
 <div class="disclosure-body">
-<p><a class="btn" href="/connections#new-key">CREATE API KEY</a></p>
+<p><a class="btn" href="/connections#new-key">${w("connect.createKey")}</a></p>
 <h3>xAI Grok API</h3>
 ${codeBlock("xai", xai)}
 <h3>OpenAI Responses API</h3>
 ${codeBlock("openai", openai)}
 <h3>Anthropic Messages API (MCP connector)</h3>
 ${codeBlock("anthropic", anthropic)}
-<p class="muted">The MCP connector fields change between API versions. Check each provider's docs for the current names and beta headers.</p>
+<p class="muted">${w("connect.apiNote")}</p>
 </div>
 </details>
 </section>
 <section class="block">
-${sectionTitle(CHAT_ICON, "START TALKING AND GETTING HELP FROM OUR AGENT")}
-<ul class="starters">${PROMPTS.map((p) => `<li><b>${esc(p.title)}</b><small>${esc(p.description)}</small></li>`).join("")}</ul>
-<p class="muted">Apps that support MCP prompts list these as shortcuts. In the others, type the request.</p>
+${sectionTitle(CHAT_ICON, w("connect.talkTitle"))}
+<ul class="starters">${PROMPTS.map((p) => `<li><b>${esc(w(`prompts.${p.name}.title`))}</b><small>${esc(w(`prompts.${p.name}.description`))}</small></li>`).join("")}</ul>
+<p class="muted">${w("connect.talkNote")}</p>
 </section>`;
-  return layout({ title: "Connect your AI Agent · Onhundred Protocol", ownerName: meta.ownerName, owner: true, body, current: "/connections", origin });
+  return layout({ title: w("site.appTitle", w("connect.title")), meta, owner: true, body, current: "/connections", origin });
 }
 
 // ---------------------------------------------------------------------------
 // Connections
 
-export function connectionsPage({ meta, agents, url, newKey }) {
+export function connectionsPage({ meta, lang, agents, url, newKey }) {
+  usePage(meta, lang);
   const rows = agents
     .map((a) => {
-      const status = a.revoked_at ? `revoked ${esc(a.revoked_at.slice(0, 10))}` : "active";
+      const status = a.revoked_at ? w("connections.revoked", esc(a.revoked_at.slice(0, 10))) : w("connections.active");
       const revoke = a.revoked_at
         ? ""
-        : `<form method="post" action="/owner/action"><input type="hidden" name="op" value="revoke"><input type="hidden" name="id" value="${esc(a.id)}"><button class="btn small" type="submit">REVOKE</button></form>`;
-      return `<tr><td><b>${esc(a.name)}</b></td><td>${a.kind === "key" ? "API key" : "Sign-in"}</td><td>${esc(a.access)}</td><td>${esc(a.created_at.slice(0, 10))}</td><td>${status}</td><td>${revoke}</td></tr>`;
+        : `<form method="post" action="/owner/action"><input type="hidden" name="op" value="revoke"><input type="hidden" name="id" value="${esc(a.id)}"><button class="btn small" type="submit">${w("connections.revoke")}</button></form>`;
+      return `<tr><td><b>${esc(a.name)}</b></td><td>${w(a.kind === "key" ? "connections.apiKey" : "connections.signIn")}</td><td>${esc(w("connections.access")[a.access] || a.access)}</td><td>${esc(a.created_at.slice(0, 10))}</td><td>${status}</td><td>${revoke}</td></tr>`;
     })
     .join("");
   const keyBox = newKey
-    ? `<section class="block">${notice("Copy this key now. It is shown once and stored only as a hash.", "good")}<div class="copy"><code id="new-key-value">${esc(newKey.key)}</code><button class="btn" type="button" data-copy="#new-key-value">COPY</button></div></section>`
+    ? `<section class="block">${notice(w("connections.copyKey"), "good")}<div class="copy"><code id="new-key-value">${esc(newKey.key)}</code><button class="btn" type="button" data-copy="#new-key-value">${w("common.copy")}</button></div></section>`
     : "";
+  const head = w("connections.columns").map((c) => `<th>${c}</th>`).join("");
   const body = `${flash(url)}${keyBox}
 <section class="block">
-<div class="page-head"><h1>Connections</h1><a class="btn signal" href="/connect">CONNECT YOUR AI</a></div>
-<p>Every app and key is a named agent. Its name appears in the history next to each change it makes.</p>
-${agents.length ? `<table class="table"><thead><tr><th>Name</th><th>Type</th><th>Access</th><th>Created</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No connections yet. <a href="/connect">Connect your first AI app.</a></p>`}
+<div class="page-head"><h1>${w("connections.title")}</h1><a class="btn signal" href="/connect">${w("common.connectAi")}</a></div>
+<p>${w("connections.intro")}</p>
+${agents.length ? `<table class="table"><thead><tr>${head}<th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${w("connections.none")}</p>`}
 </section>
 <section class="block" id="new-key">
-${sectionTitle(KEY_ICON, "NEW API KEY")}
+${sectionTitle(KEY_ICON, w("connections.newKey"))}
 <form method="post" action="/owner/action" class="card form">
 <input type="hidden" name="op" value="create_key">
-<label>Name <input class="field" name="name" required maxlength="40" placeholder="grok-bot"></label>
-<label>Access <select class="field" name="access"><option value="agent">agent: proposes and logs, can't approve</option><option value="owner">owner: can also approve</option></select></label>
-<button class="btn signal" type="submit">CREATE KEY</button>
+<label>${w("connections.name")} <input class="field" name="name" required maxlength="40" placeholder="grok-bot"></label>
+<label>${w("connections.accessLabel")} <select class="field" name="access"><option value="agent">${w("connections.agentOption")}</option><option value="owner">${w("connections.ownerOption")}</option></select></label>
+<button class="btn signal" type="submit">${w("connections.create")}</button>
 </form>
 </section>`;
-  return layout({ title: "Connections · Onhundred Protocol", ownerName: meta.ownerName, owner: true, body, current: "/connections" });
+  return layout({ title: w("site.appTitle", w("connections.title")), meta, owner: true, body, current: "/connections", url });
 }
 
 // ---------------------------------------------------------------------------
 // Sign-in and consent
 
-export function loginPage({ meta, next = "/", error = "", configured: isConfigured }) {
+export function loginPage({ meta, lang, next = "/", error = "", configured: isConfigured }) {
+  usePage(meta, lang);
   const body = `<section class="block narrow">
-<h1>Sign in</h1>
+<h1>${w("login.title")}</h1>
 ${!isConfigured ? setupNotice() : ""}
 ${error ? notice(esc(error), "bad") : ""}
 <form method="post" action="/login" class="card form">
 <input type="hidden" name="next" value="${esc(next)}">
-<label>Owner password <input class="field" type="password" name="password" autocomplete="current-password" required autofocus></label>
-<button class="btn signal" type="submit">SIGN IN</button>
+<label>${w("login.password")} <input class="field" type="password" name="password" autocomplete="current-password" required autofocus></label>
+<button class="btn signal" type="submit">${w("login.submit")}</button>
 </form>
 </section>`;
-  return layout({ title: "Sign in · Onhundred Protocol", ownerName: meta.ownerName, body });
+  return layout({ title: w("site.appTitle", w("login.title")), meta, body });
 }
 
-export function consentPage({ meta, details, handle }) {
-  const where = details.redirectIsLoopback
-    ? `${esc(details.redirectHost)}, an app on this computer. Any local app can claim this name: allow it only if you just started the connection.`
-    : esc(details.redirectHost);
+export function consentPage({ meta, lang, details, handle }) {
+  usePage(meta, lang);
+  const where = details.redirectIsLoopback ? w("consent.loopback", esc(details.redirectHost)) : esc(details.redirectHost);
   const body = `<section class="block narrow">
-<h1>Allow ${esc(details.clientName)}?</h1>
+<h1>${esc(w("consent.title", details.clientName))}</h1>
 <form method="post" action="/authorize" class="card form">
 <input type="hidden" name="handle" value="${esc(handle)}">
-<p><b>${esc(details.clientName)}</b>${details.clientDomain ? ` from <b>${esc(details.clientDomain)}</b>` : ""} wants owner access to your log.</p>
-<p>It will read every loop and experiment, record changes and approve them. Text it writes still waits for your OK before it goes public.</p>
-<p class="muted">Tokens go to: ${where}</p>
-<p class="muted">Scopes: ${details.scope.map(esc).join(", ") || "mcp"}</p>
-<div class="actions"><button class="btn signal" type="submit" name="decision" value="approve">ALLOW</button><button class="btn" type="submit" name="decision" value="deny">DENY</button></div>
+<p>${w("consent.wants", `<b>${esc(details.clientName)}</b>`, details.clientDomain ? `<b>${esc(details.clientDomain)}</b>` : "")}</p>
+<p>${w("consent.will")}</p>
+<p class="muted">${w("consent.tokens", where)}</p>
+<p class="muted">${w("consent.scopes", details.scope.map(esc).join(", ") || "mcp")}</p>
+<div class="actions"><button class="btn signal" type="submit" name="decision" value="approve">${w("consent.allow")}</button><button class="btn" type="submit" name="decision" value="deny">${w("consent.deny")}</button></div>
 </form>
 </section>`;
-  return layout({ title: "Allow access · Onhundred Protocol", ownerName: meta.ownerName, body });
+  return layout({ title: w("site.appTitle", w("consent.pageTitle")), meta, body });
 }
 
-export function messagePage({ meta, title, text, status = 400 }) {
-  return html(layout({ title, ownerName: meta?.ownerName, body: `<section class="block narrow"><h1>${esc(title)}</h1><p>${esc(text)}</p><p><a href="/">Back to the log</a></p></section>` }), { status });
+export function messagePage({ meta, lang, title, text, status = 400 }) {
+  usePage(meta, lang);
+  return html(layout({ title, meta, body: `<section class="block narrow"><h1>${esc(title)}</h1><p>${esc(text)}</p><p><a href="/">${w("common.backToLog")}</a></p></section>` }), { status });
 }

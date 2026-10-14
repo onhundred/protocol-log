@@ -1,18 +1,22 @@
 // Every write the log accepts, as pure functions over a cloned state.
 // The WRITER Durable Object runs them one at a time, validates the result and saves the diff.
 import {
+  ABOUT_MAX_WORDS,
   CHALLENGE_LEVELS,
   LEVELS,
+  LIST_SIZES,
   ODDS,
   QUESTION_KINDS,
   areaExists,
   checkInDue,
+  checkInWindow,
   compareVersions,
   estimateCanStart,
   isActive,
   isMeasured,
   isOpen,
   levelName,
+  listSize,
   logVersion,
   nameIssues,
   newRuleBreaks,
@@ -116,16 +120,16 @@ const touch = (loop, ctx) => {
 function setText(target, fields, ctx) {
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue;
-    if (!ctx.directText) refuseTone(k, v);
+    if (!ctx.directText) refuseTone(k, v, ctx.version);
     if (ctx.directText || target.proposed) target[k] = v;
     else target.pending = { ...(target.pending || {}), [k]: v };
   }
 }
 
 // An agent's text is checked the moment it's written, so the agent hears which rule it broke and rewrites it.
-function refuseTone(field, value) {
+function refuseTone(field, value, version) {
   if (!value || typeof value !== "object") return;
-  const issues = Object.entries(value).flatMap(([lang, s]) => voiceIssues(s, lang).map((i) => `${field} (${lang}) ${i}`));
+  const issues = Object.entries(value).flatMap(([lang, s]) => voiceIssues(s, lang, version).map((i) => `${field} (${lang}) ${i}`));
   if (issues.length) fail(`${issues.join(" ")} Rewrite it following onhundred://docs/voice.`);
 }
 
@@ -140,9 +144,9 @@ function newLoop(state, spec, ctx, extra = {}) {
   if (!ctx.directText) {
     if (!String(spec.evidence || "").trim())
       fail("evidence is required: say where this loop showed up, like a calendar block, an email thread or what the person told you. It stays private.");
-    refuseTone("name", name);
-    refuseTone("doneWhen", doneWhen);
-    refuseTone("scope", scope);
+    refuseTone("name", name, ctx.version);
+    refuseTone("doneWhen", doneWhen, ctx.version);
+    refuseTone("scope", scope, ctx.version);
   }
   const loop = {
     code,
@@ -189,7 +193,7 @@ function refuseBrokenText(state, target, fields) {
       const found = [
         ...(field === "name" ? nameIssues(s, lang, version) : []),
         ...(field === "scope" ? scopeIssues(s) : []),
-        ...voiceIssues(s, lang),
+        ...voiceIssues(s, lang, version),
       ];
       for (const i of found) issues.push(`${field} (${lang}) ${i}`);
     }
@@ -198,12 +202,65 @@ function refuseBrokenText(state, target, fields) {
 }
 
 // ---------------------------------------------------------------------------
+// Translations: the texts of a log in a language it lacks. Targets are loop codes, experiment codes,
+// rounds (EXP-01#1.2 for round 1 try 2) and "about".
+
+const TRANSLATABLE = { loop: ["name", "doneWhen", "scope"], experiment: ["question", "hypothesis"], stage: ["learned"], about: ["about"] };
+
+function translationTarget(state, target) {
+  if (target === "about") return { ref: state.meta, fields: TRANSLATABLE.about };
+  const round = /^(EXP-\d+)#(\d+)\.(\d+)$/.exec(target);
+  if (round) {
+    const t = findExp(state, round[1]).stages.find((x) => x.stage === Number(round[2]) && x.try === Number(round[3]));
+    if (!t) fail(`${target}: ${round[1]} has no round ${round[2]} try ${round[3]}.`);
+    return { ref: t, fields: TRANSLATABLE.stage };
+  }
+  if (/^EXP-\d+$/.test(target)) return { ref: findExp(state, target), fields: TRANSLATABLE.experiment };
+  const loop = findLoop(state, target);
+  if (loop.retired) fail(`${target} is retired. Its text stays as it was.`);
+  return { ref: loop, fields: TRANSLATABLE.loop };
+}
+
+// Where a field's text lives now: its pending version while one waits for approval, else the live one.
+const textHolder = (ref, field) => (ref.pending?.[field] ? ref.pending : ref);
+const hasText = (value, lang) => typeof value?.[lang] === "string" && value[lang].trim() !== "";
+
+// Every text that lacks one of the log's languages, with the text to translate from.
+export function missingTranslations(state) {
+  const langs = state.meta.languages?.length ? state.meta.languages : ["en"];
+  const out = [];
+  const check = (target, ref, fields) => {
+    const missing = {};
+    const text = {};
+    for (const f of fields) {
+      const value = textHolder(ref, f)[f];
+      if (!value || typeof value !== "object" || !Object.keys(value).some((l) => hasText(value, l))) continue;
+      const lack = langs.filter((l) => !hasText(value, l));
+      if (!lack.length) continue;
+      missing[f] = lack;
+      text[f] = value;
+    }
+    if (Object.keys(missing).length) out.push({ target, missing, text });
+  };
+  check("about", state.meta, TRANSLATABLE.about);
+  for (const l of state.loops) if (!l.retired) check(l.code, l, TRANSLATABLE.loop);
+  for (const e of state.experiments) {
+    check(e.code, e, TRANSLATABLE.experiment);
+    for (const t of e.stages || []) check(`${e.code}#${t.stage}.${t.try}`, t, TRANSLATABLE.stage);
+  }
+  return out;
+}
+
+const MISSING_SHOWN = 20;
+
+// ---------------------------------------------------------------------------
 
 export const ops = {
   // Inventory
   propose_loops(state, { loops }, ctx) {
     if (!Array.isArray(loops) || !loops.length) fail("loops is a list of 1 or more proposed loops.");
-    if (loops.length > P.limits.loops) fail(`propose ${P.limits.loops} loops at most per call.`);
+    const max = listSize(state.meta);
+    if (loops.length > max) fail(`propose ${max} loops at most per call.`);
     const codes = loops.map((spec) => newLoop(state, spec, ctx).code);
     return { target: codes.join(","), result: { proposed: codes, note: "Proposed loops wait for the owner's approve_loops." } };
   },
@@ -503,9 +560,23 @@ export const ops = {
     owner(ctx);
     if (state.meta.mode === "frozen") fail("your list is already frozen.");
     const n = state.loops.filter(isActive).length;
-    if (n !== P.limits.loops) fail(`${n} approved loops. Freezing needs exactly ${P.limits.loops}, so the list can't only grow.`);
-    Object.assign(state.meta, { mode: "frozen", inventoryVersion: 1, frozenAt: ctx.now });
-    return { target: "inventory", result: { mode: "frozen", inventoryVersion: 1 } };
+    const size = listSize(state.meta);
+    if (n !== size) fail(`${n} approved loops. Freezing needs exactly ${size}, so the list can't only grow.`);
+    const inventoryVersion = (Number(state.meta.inventoryVersion) || 0) + 1;
+    Object.assign(state.meta, { mode: "frozen", inventoryVersion, frozenAt: ctx.now });
+    return { target: "inventory", result: { mode: "frozen", inventoryVersion, listSize: size } };
+  },
+
+  // Protocol section 5.4: a frozen list of 10 grows to 100 at a check-in. Its 10 loops keep everything;
+  // the list goes back to building until the other 90 are approved and it's frozen as the next version.
+  grow_list(state, _args, ctx) {
+    owner(ctx);
+    if (listSize(state.meta) !== 10) fail("only a list of 10 can grow. A list of 100 is already the full size and never shrinks.");
+    if (state.meta.mode !== "frozen") fail("freeze your 10 loops first. Before that, set listSize to 100 with set_meta.");
+    if ((Number(state.meta.cycle) || 0) >= 1 && checkInWindow(state.meta) == null)
+      fail("a list grows at a check-in. Wait for the next one: it opens on day ${P.limits.cycleWeeks * 7 - 1} of the period.");
+    Object.assign(state.meta, { listSize: 100, mode: "building" });
+    return { target: "inventory", result: { listSize: 100, mode: "building", inventoryVersion: state.meta.inventoryVersion } };
   },
 
   // Owner: experiments
@@ -601,6 +672,15 @@ export const ops = {
       },
       cards: Boolean,
       pausedUntil: (v) => date(v, "pausedUntil"),
+      listSize: (v) => {
+        const size = Number(v);
+        if (!LIST_SIZES.includes(size)) fail(`listSize is ${LIST_SIZES.join(" or ")}. No other size is allowed, so results can be compared.`);
+        if (state.meta.mode === "frozen") fail("your list is frozen. A list of 10 grows to 100 with grow_list at a check-in.");
+        if (size < listSize(state.meta) && state.meta.inventoryVersion) fail("a list never shrinks once it has been frozen.");
+        const active = state.loops.filter(isActive).length;
+        if (active > size) fail(`you have ${active} approved loops. A list of ${size} can't hold them.`);
+        return size;
+      },
     };
     const changed = [];
     const clearable = new Set(["about", "links", "pausedUntil"]);
@@ -611,7 +691,48 @@ export const ops = {
       changed.push(k);
     }
     if (!changed.length) fail("send at least 1 setting.");
-    return { target: "meta", result: { changed } };
+    if (!("languages" in args)) return { target: "meta", result: { changed } };
+    const missing = missingTranslations(state);
+    return { target: "meta", result: { changed, missingTranslations: missing.slice(0, MISSING_SHOWN), missingCount: missing.length } };
+  },
+
+  // Filling a language a text lacks goes live without approval: it adds, it never rewrites.
+  // On a proposed loop, or a text with a pending version, it fills that version, so both languages are approved together.
+  add_translations(state, { items }, ctx) {
+    if (!Array.isArray(items) || !items.length) fail('items is a list like [{ "target": "P-HOM-01", "fields": { "name": { "es": "..." } } }].');
+    const langs = state.meta.languages?.length ? state.meta.languages : ["en"];
+    const version = ctx.version || logVersion(state.meta);
+    const filled = [];
+    for (const item of items) {
+      const target = String(item?.target || "");
+      const { ref, fields } = translationTarget(state, target);
+      const entries = Object.entries(item.fields || {});
+      if (!entries.length) fail(`${target}: fields is { "name": { "es": "..." } }, one entry per text you translate.`);
+      for (const [field, value] of entries) {
+        if (!fields.includes(field)) fail(`${target} has no ${field} to translate. It has ${fields.join(", ")}.`);
+        if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${target} ${field} is { "es": "..." }, one entry per language you fill.`);
+        const holder = textHolder(ref, field);
+        if (!holder[field] || typeof holder[field] !== "object") fail(`${target} has no ${field} yet, so there is nothing to translate.`);
+        for (const [lang, raw] of Object.entries(value)) {
+          if (!langs.includes(lang)) fail(`${lang} is not a language of the log. It has ${langs.join(", ")}.`);
+          if (hasText(holder[field], lang))
+            fail(`${target} ${field} already has ${lang}. A translation only fills an empty language. Change existing text with rename_loop, which waits for approval.`);
+          const s = typeof raw === "string" ? raw.trim() : "";
+          if (!s) fail(`${target} ${field} (${lang}) is empty.`);
+          const issues = [...(field === "name" ? nameIssues(s, lang, version) : []), ...(field === "scope" ? scopeIssues(s) : []), ...voiceIssues(s, lang, version)];
+          const words = s.split(/\s+/).length;
+          if (field === "about" && words > ABOUT_MAX_WORDS) issues.push(`has ${words} words. Keep it to ${ABOUT_MAX_WORDS} or fewer.`);
+          if (issues.length) fail(`${target} ${field} (${lang}) ${issues.join(" ")} Rewrite it following onhundred://docs/voice.`);
+          holder[field] = { ...holder[field], [lang]: s };
+          filled.push(`${target} ${field} (${lang})`);
+        }
+      }
+    }
+    const missing = missingTranslations(state);
+    return {
+      target: [...new Set(items.map((i) => String(i.target)))].join(","),
+      result: { filled, stillMissing: missing.slice(0, MISSING_SHOWN), missingCount: missing.length },
+    };
   },
 
   // Owner: protocol version (section 15.2). Never blocked by what the new rules flag;
@@ -643,6 +764,15 @@ export const ops = {
 // Ops that change the rules themselves: what the new rules flag is listed, not refused.
 export const RULE_CHANGE_OPS = new Set(["adopt_protocol"]);
 
+// The state a write is measured against. A rule change counts the old state under the new rules, so it adds nothing else.
+// A new language is one too: every text lacks it until the agent translates it. Only the languages move;
+// the other settings in the same call are still checked.
+export function measuredFrom(op, args, state, next) {
+  if (RULE_CHANGE_OPS.has(op)) return { ...state, meta: next.meta };
+  if (op === "set_meta" && Object.hasOwn(args || {}, "languages")) return { ...state, meta: { ...state.meta, languages: next.meta.languages } };
+  return state;
+}
+
 export const OWNER_OPS = new Set([
   "approve_loops",
   "approve_text",
@@ -650,6 +780,7 @@ export const OWNER_OPS = new Set([
   "approve_baseline",
   "set_published",
   "freeze_inventory",
+  "grow_list",
   "register_experiment",
   "conclude_experiment",
   "set_meta",
