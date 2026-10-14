@@ -1,8 +1,8 @@
-# Onhundred Protocol v1.5
+# Onhundred Protocol v1.6
 
 A method for delegating your life and work to AI agents.
 
-Oct 13, 2026 · Ale's own run: Ale Sánchez · Waiting for outside review
+Oct 14, 2026 · Ale's own run: Ale Sánchez · Waiting for outside review
 
 ## Warning
 
@@ -431,6 +431,8 @@ By part or area, each number is worked out the same way over that part's or area
 
 **Loop names** never include a person's name or any detail that identifies them. Loops in R-PAR are published only with your partner's approval.
 
+**Cards, posts and videos** never show another person unless that person agreed. Children never appear, even with agreement.
+
 **Stop button:** anyone involved can ask to stop whatever involves them. The loop drops to still yours at once. They don't have to give a reason.
 
 **Health:** you share systems (routines, reminders), never medical data.
@@ -484,6 +486,36 @@ Every run keeps a **log**: its list, experiments, results and changes. Who sees 
 - Details about other people are removed before anything is published.
 
 **Ale's own run only:** a time saved figure is published as measured only when its loop is measured. Otherwise it is published as estimated. 4Geeks figures are published only with the business partners' agreement (section 17). Case studies with companies follow the agreement signed with each one. That includes how a failed result is published.
+
+### 13.1 Private or in public
+
+Every run is private unless you choose otherwise. To run in public, tell your agent: "I want to delegate in public." To go back, tell it again. You can switch at any time.
+
+**The 4 rules for a public run:**
+
+1. Post when something happens: your list, each bet, each result.
+2. Post your wrong bets too. They count as much as the wins.
+3. Never post anyone else. No names, no faces, nothing about your kids (section 12).
+4. Use #onhundred, so people can find you.
+
+### 13.2 Cards
+
+When something happens in your log, the platform makes a card from it. Your agent's message about it ends with the card's link.
+
+- Every number on a card comes from your log. Nobody types it, not even your agent.
+- Time saved on a card says measured or estimated.
+- The card page is hidden until you share its link. You can take it down at any time.
+- A card never shows another person's name or details.
+
+### 13.3 What your agent may and may not do
+
+- It offers to share once per moment. It doesn't ask again.
+- It never guilts you for going slow, pausing or staying private.
+- It celebrates results. It never rewards you just for talking to it.
+- It asks about your personal life only if you agree. One word stops it.
+- It never sends anything as you to another person unless they know (rule III).
+
+For how to do it well, see the guide Delegate in public.
 
 ## 14. When to stop
 
@@ -568,6 +600,7 @@ These items aren't decided by one person alone. Until each one is settled, the r
 | --- | --- |
 | Ale's own run | Ale Sánchez's public run of the method, published at onhundred.com |
 | Area | A group of loops within a part of life, such as Sales within Company |
+| Card | A picture of something that happened in your log, made by the platform, with its own hidden link. |
 | Check-in | The review every 2 weeks: what worked, what didn't, what's next. Check-ins are numbered from 1 |
 | Code | A loop's ID, in the format PART-AREA-NN |
 | Estimate | A loop's rough time, frequency and cost, from existing records or your own account |
@@ -586,6 +619,7 @@ These items aren't decided by one person alone. Until each one is settled, the r
 | Pick | One of the 3 places for a running experiment: easy, hard or fun |
 | Prove it for 3 weeks | After a round passes, the loop must keep passing its goals for 3 weeks before its level changes |
 | Round | One level of an experiment, with its own approach and goals |
+| Public run | A run where you post your progress, under the 4 rules of 13.1. |
 | Run | One person using the method, alone or as part of a company |
 | Score | The number that says which loops to try first |
 | Status | What a loop is doing right now: Measuring, Trying or Proving |
@@ -597,6 +631,14 @@ These items aren't decided by one person alone. Until each one is settled, the r
 | Your list | All your loops, with a new version every 2 weeks |
 
 ## What changed
+
+**v1.6 · Oct 14, 2026.** Delegate in public:
+
+- Added 13.1: every run is private unless you choose public. You switch by telling your agent. A public run follows 4 rules.
+- Added 13.2: cards are made by the platform from your log. Their pages stay hidden until you share the link.
+- Added 13.3: what your agent may and may not do when it offers to share.
+- Added to section 12: cards, posts and videos never show another person without their agreement, and never children.
+- New companion guide: Delegate in public.
 
 **v1.5 · Oct 13, 2026.** Plain English. Same rules, simpler words. No rule, number or step changed. The main renames:
 

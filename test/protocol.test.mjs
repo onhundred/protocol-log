@@ -46,11 +46,11 @@ test("the sample log follows every rule", async () => {
   assert.deepEqual(violations.map((v) => v.message), []);
 });
 
-// 7 loops at delegated or autonomous, 3 at assisted: 8.5 points, and 91.5% still him, shown as 92.
-test("the sample hero is 92% still him and 8.5 of 100 delegated", async () => {
+// 7 loops at delegated or autonomous, 3 at assisted: 8.5 points, and 91.5% still him, never rounded.
+test("the sample hero is 91.5% still him and 8.5 of 100 delegated", async () => {
   const { metrics: m } = derive(await seed());
   assert.equal(m.total, 100);
-  assert.equal(m.stillPct, 92);
+  assert.equal(m.stillPct, 91.5);
   assert.equal(m.delegatedPoints, 8.5);
   assert.equal(formatPoints(m.delegatedPoints), "8.5 of 100");
 });
@@ -321,7 +321,7 @@ test("gridChange always says where the grid stands, and a delta only when a leve
   renamed.loops[0].name = { ...renamed.loops[0].name, en: "Another name" };
   const same = gridChange(before, renamed);
   assert.equal(same.delta, null);
-  assert.deepEqual(same.now, { delegated: 8.5, stillPct: 92, levels: derive(before).metrics.counts });
+  assert.deepEqual(same.now, { delegated: 8.5, stillPct: 91.5, levels: derive(before).metrics.counts });
 
   const after = structuredClone(before);
   const target = after.loops.find((l) => l.level === "still" && !l.retired && !l.proposed);

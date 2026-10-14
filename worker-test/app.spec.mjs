@@ -48,7 +48,7 @@ describe("fresh install", () => {
     const row = await env.DB.prepare("SELECT value FROM meta WHERE key = 'mode'").first();
     expect(JSON.parse(row.value)).toBe("building");
     const version = await env.DB.prepare("SELECT value FROM meta WHERE key = 'protocolVersion'").first();
-    expect(JSON.parse(version.value)).toBe("1.5");
+    expect(JSON.parse(version.value)).toBe("1.6");
   });
 
   it("keeps /public.json private until publishing", async () => {
@@ -277,7 +277,7 @@ describe("owner pages", () => {
     const cookie = await ownerCookie();
     const res = await app().fetch(new Request(`${BASE}/export`, { headers: { Cookie: cookie } }));
     const snap = await res.json();
-    expect(snap.protocolVersion).toBe("1.5");
+    expect(snap.protocolVersion).toBe("1.6");
     expect(Array.isArray(snap.events)).toBe(true);
   });
 
@@ -400,12 +400,12 @@ describe("protocol versions", () => {
   }
   const ownerPage = async (cookie) => (await app().fetch(new Request(`${BASE}/`, { headers: { Cookie: cookie } }))).text();
 
-  it("offers ADOPT v1.5 on the owner page, and the button adopts it", async () => {
+  it("offers ADOPT v1.6 on the owner page, and the button adopts it", async () => {
     await onV10();
     const cookie = await ownerCookie();
     const before = await ownerPage(cookie);
     expect(before).toContain('name="op" value="adopt_protocol"');
-    expect(before).toContain("ADOPT v1.5");
+    expect(before).toContain("ADOPT v1.6");
     expect(before).toContain("takes effect now, since check-ins haven't started");
 
     const res = await app().fetch(
@@ -417,9 +417,9 @@ describe("protocol versions", () => {
       })
     );
     expect(res.status).toBe(303);
-    expect(decodeURIComponent(res.headers.get("Location"))).toContain("Protocol v1.5 is adopted.");
+    expect(decodeURIComponent(res.headers.get("Location"))).toContain("Protocol v1.6 is adopted.");
     const after = await ownerPage(cookie);
-    expect(after).not.toContain("ADOPT v1.5");
+    expect(after).not.toContain("ADOPT v1.6");
     expect(after).toMatch(/Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
     expect(after).not.toContain("Handed off went from 0 to 0");
   });
@@ -433,29 +433,29 @@ describe("protocol versions", () => {
     expect((await call(key, "approve_loops", { codes: [code] })).error).toBeNull();
 
     const state = (await call(key, "get_state")).data;
-    expect(state.protocolVersion).toMatchObject({ log: "1.0", template: "1.5", upgradeAvailable: true });
+    expect(state.protocolVersion).toMatchObject({ log: "1.0", template: "1.6", upgradeAvailable: true });
     expect(state.metrics.delegated).toMatch(/ of 100$/);
     const ahead = (await call(key, "list_pending")).data.breaksNewRules;
-    expect(ahead).toMatchObject({ version: "1.5", adopted: false });
+    expect(ahead).toMatchObject({ version: "1.6", adopted: false });
     expect(ahead.items.some((m) => m.startsWith(`${code}: name`))).toBe(true);
 
     const tools = (await mcp(key, "tools/list")).body.result.tools;
     expect(tools.find((t) => t.name === "adopt_protocol").annotations.destructiveHint).toBe(true);
     const adopted = await call(key, "adopt_protocol");
     expect(adopted.error).toBeNull();
-    expect(adopted.data.result).toMatchObject({ from: "1.0", to: "1.5", takesEffect: "now" });
+    expect(adopted.data.result).toMatchObject({ from: "1.0", to: "1.6", takesEffect: "now" });
     expect(adopted.data.result.breaksNewRules.some((m) => m.startsWith(code))).toBe(true);
-    expect(adopted.data.result.protocolChange).toMatchObject({ from: "1.0", to: "1.5" });
-    expect((await call(key, "adopt_protocol")).error).toMatch(/already runs v1.5/);
+    expect(adopted.data.result.protocolChange).toMatchObject({ from: "1.0", to: "1.6" });
+    expect((await call(key, "adopt_protocol")).error).toMatch(/already runs v1.6/);
 
     const now = (await call(key, "list_pending")).data.breaksNewRules;
-    expect(now).toMatchObject({ version: "1.5", adopted: true });
+    expect(now).toMatchObject({ version: "1.6", adopted: true });
     expect((await call(key, "propose_loops", { loops: [loop("Choose the summer camp", "R-KID")] })).error).toMatch(/failing verb \(choose\)/);
 
     const cookie = await ownerCookie();
     const page = await ownerPage(cookie);
-    expect(page).toContain("Breaks v1.5 rules");
-    expect(page).toContain(`data-fix="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.5 rules: name (en) starts with a failing verb (decide).`);
+    expect(page).toContain("Breaks v1.6 rules");
+    expect(page).toContain(`data-fix="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.6 rules: name (en) starts with a failing verb (decide).`);
     expect(page).toContain(`aria-label="Fix ${code} with AI"`);
     expect(page).toMatch(new RegExp(`data-target="${code}"><svg[^]*?</svg>FIX</button></li>`));
     expect(page).toContain("data-fix-dialog");
@@ -464,8 +464,8 @@ describe("protocol versions", () => {
 
     expect((await call(key, "set_meta", { publish: true })).error).toBeNull();
     const view = await (await app().fetch(new Request(`${BASE}/public.json`))).json();
-    expect(view.protocolVersion).toBe("1.5");
-    expect(view.protocolChange).toMatchObject({ from: "1.0", to: "1.5" });
+    expect(view.protocolVersion).toBe("1.6");
+    expect(view.protocolChange).toMatchObject({ from: "1.0", to: "1.6" });
     expect(view.attribution).toMatchObject({ text: "Onhundred Protocol by Ale Sánchez", url: "https://onhundred.com" });
     const publicPage = await (await app().fetch(new Request(`${BASE}/`))).text();
     expect(publicPage).toMatch(/Adopted [A-Z][a-z]{2} \d+: assisted counts half; 4 levels: still yours replaces unmapped and mapped/);
@@ -484,7 +484,7 @@ describe("protocol versions", () => {
     expect((await call(key, "adopt_protocol")).error).toBeNull();
 
     const page = await ownerPage(await ownerCookie());
-    expect(page).toContain(`data-fix-prompt="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.5 rules: name (en) starts with a failing verb (decide).`);
+    expect(page).toContain(`data-fix-prompt="Use Onhundred to fix ${code} in my log. It breaks the protocol v1.6 rules: name (en) starts with a failing verb (decide).`);
     expect(page).toMatch(/data-dialog-close data-rule-fix><svg[^]*?<\/svg>FIX<\/button>/);
     expect(page.match(/data-fix-dialog/g)).toHaveLength(1);
     expect(page).toContain('<textarea class="prompt-box" id="fix-prompt"');

@@ -52,13 +52,13 @@ test("adopt_protocol applies at once before check-ins start, records the change 
   delete s.meta.cycleOneStart;
   s.loops[0].name.en = "Decide where we eat out";
   s = write(s, "adopt_protocol", {}, { ...page, cycle: 0 });
-  assert.equal(s.meta.protocolVersion, "1.5");
-  assert.deepEqual(s.meta.protocolChange, { from: "1.0", to: "1.5", at: "2026-10-12", cycle: 0, until: "2026-10-26", delegatedBefore: 7, delegatedAfter: 8.5 });
+  assert.equal(s.meta.protocolVersion, "1.6");
+  assert.deepEqual(s.meta.protocolChange, { from: "1.0", to: "1.6", at: "2026-10-12", cycle: 0, until: "2026-10-26", delegatedBefore: 7, delegatedAfter: 8.5 });
   assert.equal(lastResult.takesEffect, "now");
   assert.equal(lastResult.breaksNewRules.length, 1);
   assert.match(lastResult.breaksNewRules[0], new RegExp(`^${s.loops[0].code}: name \\(en\\) starts with a failing verb \\(decide\\)`));
   assert.equal(pendingRuleBreaks(s).items.length, 1);
-  assert.throws(() => write(s, "adopt_protocol", {}, page), /already runs v1.5/);
+  assert.throws(() => write(s, "adopt_protocol", {}, page), /already runs v1.6/);
 });
 
 test("adopt_protocol waits for the next check-in once they have started", async () => {
@@ -66,7 +66,7 @@ test("adopt_protocol waits for the next check-in once they have started", async 
   s.meta.protocolVersion = "1.0";
   s = write(s, "adopt_protocol", {}, { ...page, cycle: 16 });
   assert.equal(s.meta.protocolVersion, "1.0");
-  assert.deepEqual(s.meta.protocolUpgrade, { version: "1.5", fromCycle: 17, adoptedAt: page.now });
+  assert.deepEqual(s.meta.protocolUpgrade, { version: "1.6", fromCycle: 17, adoptedAt: page.now });
   assert.equal(lastResult.takesEffect, "after check-in 16");
   assert.throws(() => write(s, "adopt_protocol", {}, page), /takes effect after check-in 16/);
 });

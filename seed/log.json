@@ -1,6 +1,6 @@
 {
   "sample": true,
-  "protocolVersion": "1.5",
+  "protocolVersion": "1.6",
   "mode": "frozen",
   "inventoryVersion": 1,
   "languages": ["en", "es"],

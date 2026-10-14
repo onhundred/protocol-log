@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/onhundred/protocol-log/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/onhundred/protocol-log/test.yml?branch=main&style=flat-square&label=tests&labelColor=0A0A09" alt="Tests"></a>
   <a href="https://github.com/onhundred/protocol-log/releases"><img src="https://img.shields.io/github/v/release/onhundred/protocol-log?style=flat-square&label=release&labelColor=0A0A09&color=C6F432" alt="Release"></a>
-  <a href="./docs/protocol.md"><img src="https://img.shields.io/badge/protocol-v1.5-C6F432?style=flat-square&labelColor=0A0A09" alt="Protocol v1.5"></a>
+  <a href="./docs/protocol.md"><img src="https://img.shields.io/badge/protocol-v1.6-C6F432?style=flat-square&labelColor=0A0A09" alt="Protocol v1.6"></a>
   <a href="#what-your-agent-can-do"><img src="https://img.shields.io/badge/MCP-40%20tools-C6F432?style=flat-square&labelColor=0A0A09" alt="MCP: 40 tools"></a>
   <a href="https://workers.cloudflare.com"><img src="https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-C6F432?style=flat-square&labelColor=0A0A09&logo=cloudflare&logoColor=white" alt="Runs on Cloudflare Workers"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-C6F432?style=flat-square&labelColor=0A0A09" alt="License: Apache 2.0"></a>

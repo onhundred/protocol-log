@@ -1,5 +1,5 @@
 {
-  "version": "1.5",
+  "version": "1.6",
   "attribution": {
     "text": "Onhundred Protocol by Ale Sánchez",
     "url": "https://onhundred.com",
@@ -117,7 +117,8 @@
     "1.2": { "en": "4 levels: still yours replaces unmapped and mapped, and measured is a mark", "es": "4 niveles: todavía tuyo reemplaza a sin mapear y mapeado, y medido es una marca" },
     "1.3": { "en": "your list holds 10 or 100 loops", "es": "tu lista tiene 10 o 100 loops" },
     "1.4": { "en": "an estimated cost is enough to start an experiment", "es": "un costo estimado basta para empezar un experimento" },
-    "1.5": { "en": "plain words, same rules", "es": "palabras simples, mismas reglas" }
+    "1.5": { "en": "plain words, same rules", "es": "palabras simples, mismas reglas" },
+    "1.6": { "en": "private by default, with cards when you share", "es": "privado por defecto, con tarjetas cuando compartes" }
   },
   "voice": {
     "neverUse": [
