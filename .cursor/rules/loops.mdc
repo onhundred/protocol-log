@@ -1,5 +1,5 @@
 ---
-description: How to create, name and store loops (the 10 or 100 squares of the grid)
+description: How to create, name and store loops (the 100 squares of the grid)
 globs: seed/loops.json,docs/LOOPS.md,src/**/*.mjs
 alwaysApply: false
 ---
@@ -18,7 +18,6 @@ Stranger, done, action, one-rule, everyone-has-one and ceiling. If it fails one,
 - No names of people and no identifying details. "My partner," never her name.
 - Name the output, not the decision behind it: "Get weeknight dinner on the table," not "Decide what's for dinner."
 - Never start with: decide, choose, remember, remind, track, monitor, keep an eye on, stay on top of, think about, prepare, review, manage, handle. `validate()` enforces these by the log's protocol version: decide and choose fail from v1.1 (`naming.since` in [protocol.json](mdc:protocol.json)).
-- Spanish names never start with: decidir, elegir, recordar, recordarme, dar seguimiento, monitorear, estar al tanto de, pensar en, preparar, revisar, gestionar, manejar. They fail from v1.7 (`naming.languageSince`). Spanish text also drops parte, tarea and prueba (`voice.retired.es`).
 
 ## Storage (`seed/loops.json`, D1 `loops` in the app)
 
@@ -41,8 +40,7 @@ Optional: `scope` (public boundary: what counts and what doesn't), `measuring`, 
 ## Rules enforced by `validate()` in [lib/protocol.mjs](mdc:lib/protocol.mjs)
 
 - Codes are `BRANCH-AREA-NN` from protocol section 2.4 and are never reused. Retire a loop with `retired: true`, never delete it.
-- Every run has a list size, `meta.listSize`: 10 or 100. A log that never stored one starts at 10, unless it already holds more than 10 active loops (built before sizes existed), which stays at 100 (`effectiveMeta()` in [src/store.mjs](mdc:src/store.mjs)). Read it with `listSize(meta)`, never `P.limits.loops`. A frozen inventory has exactly that many active loops. Building mode allows 0 up to it.
-- A frozen list of 10 grows to 100 only through `grow_list` at a check-in, and goes back to building until it's frozen as the next version. A list never shrinks.
+- A frozen inventory has exactly 100 active loops. Building mode allows 0 to 100.
 - Ceilings (protocol 9.3): R-KID and P-HLT and C-PPL cap at assisted, R-PAR at delegated, P-FIN with `over500` at delegated.
 - Levels are `still` (Still yours), `assisted` (Help me), `delegated` (Do it, I approve) and `autonomous` (Do it alone). `levelName()` gives the words people see; the keys never change.
 - Measured is a mark, not a level: a loop is measured once its `baseline` is approved (`isMeasured()`). Logs from before v1.2 store `unmapped` and `mapped`; `upgradeLevels()` reads both as `still`.

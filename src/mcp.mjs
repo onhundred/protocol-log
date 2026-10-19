@@ -39,7 +39,6 @@ import {
 import { createApiKey, listAgents, revokeAgent, viewPass } from "./auth.mjs";
 import { cardSummary, cardUrls, readyCards, remakeCard, requestPostImages, takeDown } from "./cards.mjs";
 import * as docs from "./docs.mjs";
-import { t } from "./i18n.mjs";
 import { pendingItems } from "./ops.mjs";
 import { getCard, getEvents, isPublished, lastShown, listCards, logEvent, noticeGiven, nudgeActivity, readState, recordNudge, recordShown } from "./store.mjs";
 import { TAKEN_DOWN_NOTE, writer } from "./writer.mjs";
@@ -108,16 +107,9 @@ const WAITS_FOR_OWNER = new Set(["propose_loops", "split_loop", "merge_loops", "
 
 // The links an agent ends its reply with. Owner connections get a view pass: the owner view, no sign-in,
 // nothing on it changes the log. Agent-access connections get plain links.
-// On a log with more than 1 language, every link says which one it opens in, and byLanguage has the set for each.
-const withLang = (url, lang) => {
-  const [path, hash] = url.split("#");
-  return `${path}${path.includes("?") ? "&" : "?"}lang=${lang}${hash ? `#${hash}` : ""}`;
-};
-
 async function linksFor(call, op, r) {
   const { origin, agentId, access } = call.props;
   if (!origin) return null;
-  const languages = (await call.state()).meta.languages || ["en"];
   const issued = access === "owner" && agentId ? await viewPass(call.env, agentId) : null;
   const moved = (r?.grid?.delta?.moved || []).map((m) => m.code);
   const q = moved.length ? `moved=${moved.join(",")}` : "";
@@ -127,14 +119,12 @@ async function linksFor(call, op, r) {
   const approve = WAITS_FOR_OWNER.has(op) || r?.result?.pending === true ? `${origin}/login?next=/` : null;
   const open = approve || (moved.length ? graph : loop || graph);
   const card = r?.moment?.card?.url || r?.cardsReady?.[0]?.url || null;
-  const set = (lang) => {
-    const L = (u) => (languages.length > 1 ? withLang(u, lang) : u);
-    return { open: L(open), graph: L(graph), ...(loop ? { loop: L(loop) } : {}), ...(approve ? { approve: L(approve) } : {}) };
-  };
   return {
-    ...set(languages[0]),
+    open,
+    graph,
+    ...(loop ? { loop } : {}),
+    ...(approve ? { approve } : {}),
     ...(card ? { card } : {}),
-    ...(languages.length > 1 ? { byLanguage: Object.fromEntries(languages.map((l) => [l, set(l)])) } : {}),
     ...(issued ? { expiresAt: new Date(issued.exp).toISOString() } : {}),
   };
 }
@@ -217,7 +207,7 @@ const TOOLS = [
         },
         loops: { active: d.loops.length, proposed: state.loops.filter((l) => l.proposed && !l.retired).length, levels: d.metrics.counts },
         metrics: {
-          delegated: formatPoints(d.metrics.delegatedPoints, d.metrics.size),
+          delegated: formatPoints(d.metrics.delegatedPoints),
           delegatedPoints: d.metrics.delegatedPoints,
           stillPct: d.metrics.stillPct,
           branches: d.metrics.branches,
@@ -415,38 +405,16 @@ const TOOLS = [
   writeTool("record_drop", "Record a drop", "Moves a loop down: 1 level after 5 failing days, straight to still (Still yours) after harm or lost consent.", obj({ code: str("Loop code."), cause: { type: "string", enum: Object.keys(P.drops) }, at: str("YYYY-MM-DD. Default today."), note: str("What happened. Private.") }, ["code", "cause"])),
   writeTool("add_learned", "Add a lesson", "Adds the public, anonymized lesson of an ended round. It waits for the owner's approval. Only real lessons: never invent one.", obj({ experiment: str("EXP-NN."), stage: int("Round number. Default: the last ended round."), try: int("Default 1."), learned: textObj("What was learned, in 1 to 3 sentences.") }, ["experiment", "learned"])),
 
-  writeTool(
-    "add_translations",
-    "Add missing translations",
-    "Fills a language that a text lacks: loop names, doneWhen and scope, experiment questions and bets, round lessons (target EXP-NN#round.try) and about. It goes live without approval because it only adds; a language that already has text is refused, so change existing text with rename_loop. On a proposed loop, or text with a pending version, it fills that version. Each text is checked like any other: name, scope and voice rules. Translate faithfully, following onhundred://docs/voice, and send up to 25 items per call.",
-    obj(
-      {
-        items: {
-          type: "array",
-          items: obj(
-            {
-              target: str("A loop code, an experiment code, EXP-NN#round.try for a round's lesson, or about."),
-              fields: { type: "object", description: 'Field to { language: text }, like { "name": { "es": "Pagar la renta" } }.', additionalProperties: { type: "object", additionalProperties: { type: "string" } } },
-            },
-            ["target", "fields"]
-          ),
-        },
-      },
-      ["items"]
-    )
-  ),
-
   // Owner
   writeTool("approve_loops", "Approve loops", "Owner only. Approves proposed loops into the list and applies retirements. Confirm with the person first.", obj({ codes: { type: "array", items: { type: "string" } }, retire: { type: "array", items: { type: "string" } } }), { owner: true, annotations: DESTRUCTIVE }),
   writeTool("approve_text", "Publish pending text", "Owner only. Publishes text agents wrote (targets from list_pending, or all). Show the person the exact text and confirm before calling.", obj({ targets: { type: "array", items: { type: "string" } }, all: bool("Approve everything pending.") }), { owner: true, annotations: DESTRUCTIVE }),
   writeTool("reject_text", "Discard pending text", "Owner only. Discards pending text. The live version stays.", obj({ targets: { type: "array", items: { type: "string" } } }, ["targets"]), { owner: true }),
   writeTool("approve_baseline", "Approve the measured cost", "Owner only. Approves a recorded measured cost (baseline). The loop is marked measured; its level stays.", obj({ code: str("Loop code.") }, ["code"]), { owner: true }),
   writeTool("set_published", "Publish a partner loop", "Owner only. R-PAR loops stay private until the partner approves publishing them.", obj({ code: str("R-PAR loop code."), published: bool("true once the partner agreed.") }, ["code", "published"]), { owner: true, annotations: DESTRUCTIVE }),
-  writeTool("freeze_inventory", "Freeze the list", "Owner only. Needs exactly your list size in approved loops (listSize: 10 or 100). From then on the list keeps that size. Confirm with the person first.", obj({}), { owner: true, annotations: DESTRUCTIVE }),
-  writeTool("grow_list", "Grow the list to 100", "Owner only. A frozen list of 10 grows to 100 at a check-in. The 10 loops keep their codes, levels and history. The list goes back to building: propose the other 90, then freeze it as the next version. A list never shrinks. Confirm with the person first.", obj({}), { owner: true, annotations: DESTRUCTIVE }),
+  writeTool("freeze_inventory", "Freeze the list", "Owner only. Needs exactly 100 approved loops. From then on the 100 rule always applies. Confirm with the person first.", obj({}), { owner: true, annotations: DESTRUCTIVE }),
   writeTool("register_experiment", "Write down an experiment", `Owner only. Writes down the card before the first round: pick (slot), question, bet (If, then, because), odds, loops and goal. Ask the person for the odds: the honest chance, from ${ODDS.min} to ${ODDS.max}, that the bet holds. They're public, so friends can guess how it ends. The question and bet wait for approve_text.`, obj({ slot: { type: "string", enum: P.limits.experimentSlots }, funReason: str("Required for the fun pick."), question: textObj("1 sentence anyone understands."), hypothesis: textObj("The bet: If ..., then ..., because ...."), odds: { type: "integer", minimum: ODDS.min, maximum: ODDS.max, description: `The person's honest chance the bet holds, ${ODDS.min} to ${ODDS.max}.` }, loops: { type: "array", items: { type: "string" } }, goal: levels, peopleInvolved: str("Who, and proof of consent. Never published.") }, ["slot", "question", "hypothesis", "odds", "loops", "goal"]), { owner: true }),
   writeTool("conclude_experiment", "End an experiment", "Owner only. Records the bet as confirmed (right), refuted (wrong) or unclear (not clear), and the final level. A wrong bet is a result, not a failure.", obj({ experiment: str("EXP-NN."), hypothesis: { type: "string", enum: P.conclusions }, level: levels }, ["experiment", "hypothesis"]), { owner: true }),
-  writeTool("set_meta", "Change settings", `Owner only. ownerName, about, links, languages, stillMetric, publish, companyFigures, cycleOneStart (the check-in number and day follow from it), cycle, day, grid, challenge (${CHALLENGE_LEVELS.join(", ")}: how hard you push the person), questions ({ ${QUESTION_KINDS.join(", ")} }, each true or false: when the person says to stop a kind of question, turn off that kind only), cards (true or false: share cards after big moments), pausedUntil (YYYY-MM-DD or null), listSize (10 or 100, set while building: 10 to start, 100 for everything; a frozen list of 10 grows with grow_list). about is why the person runs the protocol, ${ABOUT_MAX_WORDS} words or fewer, in every language of the log, following onhundred://docs/voice: show the person the exact text before you call. links is up to ${MAX_LINKS} profile links, [{ kind, url }], kind one of ${Object.keys(PROFILE_LINKS).join(", ")}, url a full https link. links: [] means the person has none, so nobody asks again. Both show on the public page; null removes them. languages lists the log's languages, main language first, like ["en", "es"]. Adding one is always accepted: the result lists missingTranslations, and you translate every one with add_translations right away.`, { type: "object", additionalProperties: true }, { owner: true }),
+  writeTool("set_meta", "Change settings", `Owner only. ownerName, about, links, languages, stillMetric, publish, companyFigures, cycleOneStart (the check-in number and day follow from it), cycle, day, grid, challenge (${CHALLENGE_LEVELS.join(", ")}: how hard you push the person), questions ({ ${QUESTION_KINDS.join(", ")} }, each true or false: when the person says to stop a kind of question, turn off that kind only), cards (true or false: share cards after big moments), pausedUntil (YYYY-MM-DD or null). about is why the person runs the protocol, ${ABOUT_MAX_WORDS} words or fewer, in every language of the log, following onhundred://docs/voice: show the person the exact text before you call. links is up to ${MAX_LINKS} profile links, [{ kind, url }], kind one of ${Object.keys(PROFILE_LINKS).join(", ")}, url a full https link. links: [] means the person has none, so nobody asks again. Both show on the public page; null removes them.`, { type: "object", additionalProperties: true }, { owner: true }),
   writeTool("adopt_protocol", "Adopt the new protocol version", "Owner only. Moves the log to the protocol version in this code (get_state shows both). Before check-ins start it applies now; otherwise after the next check-in. Returns what breaks the new rules: rename those after. Confirm with the person first.", obj({}), { owner: true, annotations: DESTRUCTIVE }),
   {
     name: "undo_event",
@@ -726,9 +694,9 @@ const RESOURCES = [
 const PROMPTS = [
   {
     name: "build_inventory",
-    title: "Help me build my loops",
+    title: "Help me build my 100 loops",
     description: "Find, name and propose the loops of your life and work.",
-    text: "Help me build my loops. Read onhundred://docs/loops, onhundred://docs/voice and onhundred://docs/playbook first, then call get_state. Its settings.listSize is 10 or 100. If my list size is 10, propose the 10 loops that take the most hours. Ask me what you can read (calendar, email, documents) and work through one branch at a time: Relationships, Personal, Company. When a part of my life has no loops, ask me 1 gap question from the playbook. For every loop check the six tests, decide whether it needs a scope, write down where it showed up (evidence), then propose it with propose_loops, in every language of the log. Show me each batch before you send it. Approving is my call.",
+    text: "Help me build my 100 loops. Read onhundred://docs/loops, onhundred://docs/voice and onhundred://docs/playbook first, then call get_state. Ask me what you can read (calendar, email, documents) and work through one branch at a time: Relationships, Personal, Company. When a part of my life has no loops, ask me 1 gap question from the playbook. For every loop check the six tests, decide whether it needs a scope, write down where it showed up (evidence), then propose it with propose_loops, in every language of the log. Show me each batch before you send it. Approving is my call.",
   },
   {
     name: "fill_slots",
@@ -750,21 +718,17 @@ const PROMPTS = [
   },
 ];
 
-// An AI app has no visitor language: a prompt's title and description are in the log's main language.
-const promptWords = (name, lang) => ({ title: t(lang, `prompts.${name}.title`), description: t(lang, `prompts.${name}.description`) });
-
 function instructions(meta) {
   const langs = (meta.languages || ["en"]).join(", ");
   return [
     `Onhundred Protocol log${meta.ownerName ? ` for ${meta.ownerName}` : ""}. Mode: ${meta.mode}. It runs protocol v${meta.protocolVersion}.`,
     "Read onhundred://docs/loops before you propose or rename a loop, and onhundred://docs/voice before you write any public text.",
     `Write names, doneWhen, scope, questions, bets and lessons in every language of the log: ${langs}.`,
-    "When a text lacks one of the log's languages (set_meta returns missingTranslations, add_translations returns stillMissing), translate it with add_translations. A translation goes live without approval; changing text that exists still goes through rename_loop.",
     "Text you write waits as pending until the owner approves it with approve_text. Show the person the exact text before that call.",
     "Levels never change by hand: only record_hold and record_drop move them.",
     "Talk to people in plain words. Level keys: still is Still yours, assisted is Help me, delegated is Do it, I approve, autonomous is Do it alone. A loop is measured once its baseline (measured cost) is approved. A stage is a round, a hold is proving, a slot is a pick, the ceiling is the limit, and each cycle ends at a check-in.",
     "Every write is checked against the protocol. A rejected write returns the rule it broke: fix it and try again.",
-    "After writes succeed, end your reply with 1 link, once per reply, not once per call. If links.approve is present, it wins. Otherwise, when the write returned a moment, reply in its kind (congratulate, honest or challenge) using its facts, and end with links.card in the language you're speaking (moment.card.urls). The first time you share a card whose postImages is available, add 1 line: \"Want a square or story version to post?\" Otherwise, end with links.open. When links.byLanguage is present, use the links in the language you're speaking. If grid.delta is present, say what moved in 1 sentence, using grid.now for the totals. Links with a pass expire after 24 hours, so share a fresh one instead of reusing an old one.",
+    "After writes succeed, end your reply with 1 link, once per reply, not once per call. If links.approve is present, it wins. Otherwise, when the write returned a moment, reply in its kind (congratulate, honest or challenge) using its facts, and end with links.card in the language you're speaking (moment.card.urls). The first time you share a card whose postImages is available, add 1 line: \"Want a square or story version to post?\" Otherwise, end with links.open. If grid.delta is present, say what moved in 1 sentence, using grid.now for the totals. Links with a pass expire after 24 hours, so share a fresh one instead of reusing an old one.",
     ...nudgeLines(meta),
     ...profileAsk(meta),
   ].filter(Boolean).join(" ");
@@ -895,16 +859,12 @@ async function dispatch(msg, call) {
         if (!r) return rpcError(id, -32002, `Resource not found: ${params.uri}`);
         return rpcResult(id, { contents: [{ uri: r.uri, mimeType: r.mimeType, text: r.text() }] });
       }
-      case "prompts/list": {
-        const lang = (await call.state()).meta.languages?.[0];
-        return rpcResult(id, { prompts: PROMPTS.map(({ name }) => ({ name, ...promptWords(name, lang), arguments: [] })) });
-      }
+      case "prompts/list":
+        return rpcResult(id, { prompts: PROMPTS.map(({ name, title, description }) => ({ name, title, description, arguments: [] })) });
       case "prompts/get": {
         const p = PROMPTS.find((x) => x.name === params.name);
         if (!p) return rpcError(id, -32602, `Unknown prompt: ${params.name}`);
-        const lang = (await call.state()).meta.languages?.[0];
-        const speak = lang && lang !== "en" ? ` Talk to me in ${t("en", "languageNames")[lang] || lang}.` : "";
-        return rpcResult(id, { description: promptWords(p.name, lang).description, messages: [{ role: "user", content: { type: "text", text: p.text + speak } }] });
+        return rpcResult(id, { description: p.description, messages: [{ role: "user", content: { type: "text", text: p.text } }] });
       }
       default:
         return rpcError(id, -32601, `Method not found: ${method}`);

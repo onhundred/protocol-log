@@ -99,7 +99,7 @@ Onhundred has two voices, mirroring DESIGN.md's Two Voices Rule (Archivo for the
 | Log | The record of everything |
 | Owner | The person running the protocol (in the protocol only; the guide says "you") |
 
-**Retired:** part (now loop), subject (now owner, except in the site's Social Experiment 001 framing), test, free slot, Phase 0. In Spanish, from v1.7: parte, tarea and prueba (now loop or experimento).
+**Retired:** part (now loop), subject (now owner, except in the site's Social Experiment 001 framing), test, free slot, Phase 0.
 
 **Never use:** leverage, unlock, empower, revolutionize, game-changer, seamless, cutting-edge, supercharge, journey, delve, robust, "AI-powered," "10x," "hack," "in today's world," "the future of work."
 <!-- voice:end -->
@@ -129,7 +129,7 @@ Onhundred has two voices, mirroring DESIGN.md's Two Voices Rule (Archivo for the
 
 - Neutral Latin American Spanish, "tú."
 - Deadpan translates; wordplay doesn't. Avoid idioms and puns in English so the Spanish version can keep the joke.
-- Keep the protocol's words fixed across languages: loop and log (kept in English, like "deadline"), experimento, apuesta, ronda.
+- Keep the protocol's words fixed across languages: loop (kept in English, like "deadline"), experimento, apuesta, etapa, bitácora.
 
 ## Company-facing register
 

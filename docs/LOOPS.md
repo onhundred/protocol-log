@@ -74,8 +74,6 @@ A proposed loop has to pass all six. If it fails one, rewrite it, split it or dr
 
 **Verbs that usually fail:** decide, choose, remember, remind, track, monitor, keep an eye on, stay on top of, think about, prepare, review, manage, handle. Ask "and then what happens?" and write that instead.
 
-**In Spanish (from v1.7):** reservar, enviar, pagar and publicar pass. Decidir, elegir, recordar, recordarme, dar seguimiento, monitorear, estar al tanto de, pensar en, preparar, revisar, gestionar and manejar usually fail.
-
 ## How to write the scope
 
 The name says what. Done when says when it is finished. **Scope** draws the boundary: what counts as this loop and what doesn't. It is optional and public. 1 to 3 sentences, 60 words or fewer per language.

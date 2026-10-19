@@ -1902,7 +1902,7 @@
     "level": "still",
     "name": {
       "en": "Follow up after a product demo",
-      "es": "Enviar el seguimiento después de una demo"
+      "es": "Dar seguimiento después de una demo"
     },
     "doneWhen": {
       "en": "The follow-up email is sent within 1 day.",
@@ -1966,7 +1966,7 @@
     "level": "still",
     "name": {
       "en": "Chase contracts that haven't been signed",
-      "es": "Pedir la firma de contratos pendientes"
+      "es": "Dar seguimiento a contratos sin firmar"
     },
     "doneWhen": {
       "en": "The contract is signed or the lead says no.",

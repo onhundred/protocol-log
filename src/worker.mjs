@@ -22,7 +22,6 @@ import {
   viewerFrom,
 } from "./auth.mjs";
 import { POST_SIZES, SIZES, cardKey, cardUrls, imageUrl, postImages, readyCards, requestPostImages } from "./cards.mjs";
-import { t, writeError } from "./i18n.mjs";
 import { handleMcp } from "./mcp.mjs";
 import { cardPage, cardRenderPage, connectPage, connectionsPage, consentPage, expPage, html, logPage, loginPage, loopPage, messagePage, privatePage } from "./pages.mjs";
 import { countCardView, getCard, getEvents, getPublicEvents, isPublished, logEvent, readState, snapshot, updateCard } from "./store.mjs";
@@ -71,9 +70,8 @@ const defaultHandler = {
     } catch (err) {
       if (err instanceof AuthorizationError && err.redirectTo) return Response.redirect(err.redirectTo, 302);
       if (err instanceof AuthorizationError || err instanceof CimdFetchError) {
-        const lang = requestLang(request, new URL(request.url), ["en", "es"]).lang;
-        const text = err instanceof AuthorizationError ? err.description : t(lang, "msg.unverified");
-        return messagePage({ title: t(lang, "msg.connectionFailed"), text, lang });
+        const text = err instanceof AuthorizationError ? err.description : "This app could not be verified. Try connecting again.";
+        return messagePage({ title: "Connection failed", text });
       }
       throw err;
     }
@@ -131,60 +129,12 @@ const withQuery = (path, key, value) => `${path}?${key}=${encodeURIComponent(val
 const safeNext = (next) => (typeof next === "string" && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/");
 
 // Where a view link lands: the log page with the grid open, or one loop's page. Only valid codes pass through.
-// lang: the language the link asked for, kept so the page opens in it.
-function viewTarget(url, lang) {
+function viewTarget(url) {
   const to = url.searchParams.get("to") || "/";
   const loop = /^\/loop\/(.+)$/.exec(to)?.[1];
-  if (loop && parseCode(loop)) return lang ? `/loop/${loop}?lang=${lang}` : `/loop/${loop}`;
+  if (loop && parseCode(loop)) return `/loop/${loop}`;
   const moved = (url.searchParams.get("moved") || "").split(",").filter((c) => parseCode(c));
-  const query = [moved.length ? `moved=${moved.join(",")}` : "", lang ? `lang=${lang}` : ""].filter(Boolean).join("&");
-  return `/${query ? `?${query}` : ""}#activity`;
-}
-
-// ---------------------------------------------------------------------------
-// The page language: ?lang= (which is then remembered), the remembered choice, the browser's languages,
-// and last the log's main language. Only the log's own languages count, so an English log stays English.
-
-const LANG_COOKIE = "__Host-onhundred-lang";
-const LANG_DAYS = 365;
-
-const cookieLang = (request) =>
-  (request.headers.get("Cookie") || "")
-    .split(/;\s*/)
-    .find((c) => c.startsWith(LANG_COOKIE + "="))
-    ?.slice(LANG_COOKIE.length + 1);
-
-// "es-MX,es;q=0.9,en;q=0.8" → ["es", "es", "en"], best first.
-function browserLangs(request) {
-  return (request.headers.get("Accept-Language") || "")
-    .split(",")
-    .map((part) => {
-      const [tag, ...params] = part.trim().split(";");
-      const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
-      return { lang: tag.trim().toLowerCase().split("-")[0], q: q ? Number(q.slice(2)) : 1 };
-    })
-    .filter((x) => x.lang && x.q > 0)
-    .sort((a, z) => z.q - a.q)
-    .map((x) => x.lang);
-}
-
-function requestLang(request, url, languages) {
-  const asked = url.searchParams.get("lang");
-  const saved = cookieLang(request);
-  if (languages.includes(asked)) return { lang: asked, asked: true, save: asked !== saved };
-  if (languages.includes(saved)) return { lang: saved };
-  return { lang: browserLangs(request).find((l) => languages.includes(l)) || languages[0] };
-}
-
-// Pages vary by the language cookie and the browser's languages once a log has more than one.
-// Images and the screenshot page take ?lang= as is: loading them never changes the remembered choice.
-function withLang(res, { save, lang }, languages, path) {
-  if (languages.length < 2) return res;
-  const out = new Response(res.body, res);
-  out.headers.append("Vary", "Accept-Language, Cookie");
-  if (save && !/\.png$|\/render$/.test(path))
-    out.headers.append("Set-Cookie", `${LANG_COOKIE}=${lang}; Path=/; Secure; SameSite=Lax; Max-Age=${LANG_DAYS * 86400}`);
-  return out;
+  return `/${moved.length ? `?moved=${moved.join(",")}` : ""}#activity`;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +148,8 @@ const pickLang = (url, languages) => (languages.includes(url.searchParams.get("l
 const addQuery = (path, key, value) => `${path}${path.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
 
 // Everything a page needs to show a card: headline, preview image, links per language and the images to post.
-// lang: the page's language, which is also the card's.
-function shareView(card, { origin, lang, languages, published, owner, next = "/" }) {
+function shareView(card, { origin, url, languages, published, owner, next = "/" }) {
+  const lang = pickLang(url, languages);
   const q = languages.length > 1 ? `?lang=${lang}` : "";
   return {
     card,
@@ -210,7 +160,7 @@ function shareView(card, { origin, lang, languages, published, owner, next = "/"
     imagePath: `/c/${card.id}/og.png${q}`,
     urls: cardUrls(origin, card, { published, languages }),
     post: postImages(card, languages),
-    images: POST_SIZES.map((s) => ({ label: t(lang, s === "square" ? "share.square" : "share.story"), url: `/c/${card.id}/${s}.png${q}` })),
+    images: POST_SIZES.map((s) => ({ label: s === "square" ? "SQUARE" : "STORY", url: `/c/${card.id}/${s}.png${q}` })),
     running: card.page === "exp" && Boolean(card.facts.experiment?.running),
     owner,
     next,
@@ -224,10 +174,10 @@ async function shareFor(request, env, url, page, target, ctx) {
   const card = await getCard(env.DB, id);
   if (!card || card.revoked_at || card.waiting || card.page !== page || (card.target || null) !== (target || null)) return null;
   if (!ctx.owner && !ctx.viewer && !isBot(request)) await countCardView(env.DB, card.id);
-  return shareView(card, { ...ctx, next: url.pathname + url.search });
+  return shareView(card, { ...ctx, url, next: url.pathname + url.search });
 }
 
-async function cardRoute(request, env, url, [, id, part], { state, origin, owner, viewer, published, lang }) {
+async function cardRoute(request, env, url, [, id, part], { state, origin, owner, viewer, published }) {
   const meta = state.meta;
   const languages = meta.languages;
   const card = await getCard(env.DB, id);
@@ -240,33 +190,26 @@ async function cardRoute(request, env, url, [, id, part], { state, origin, owner
   if (part === "render") {
     const size = url.searchParams.get("size") || "og";
     if (!card || !Object.hasOwn(SIZES, size) || !(await checkRenderToken(env, card.id, url.searchParams.get("t"))))
-      return messagePage({ meta, lang, title: t(lang, "msg.notAllowed"), text: t(lang, "msg.cardOnly"), status: 403 });
+      return messagePage({ meta, title: "Not allowed", text: "This page only draws card images.", status: 403 });
     return html(cardRenderPage({ meta, card, size, lang: pickLang(url, languages), dims: SIZES[size] }));
   }
-  if (!card || card.waiting) return messagePage({ meta, lang, title: t(lang, "msg.notFound"), text: t(lang, "msg.noCard"), status: 404 });
-  if (card.revoked_at) return messagePage({ meta, lang, title: t(lang, "msg.cardDown"), text: t(lang, "msg.cardDownText"), status: 410 });
+  if (!card || card.waiting) return messagePage({ meta, title: "Not found", text: "No card has this link.", status: 404 });
+  if (card.revoked_at) return messagePage({ meta, title: "This card was taken down", text: "The person who shared it took it down.", status: 410 });
   if (!owner && !viewer && !isBot(request)) await countCardView(env.DB, card.id);
-  return html(cardPage({ meta, origin, lang, share: shareView(card, { origin, lang, languages, published, owner, next: url.pathname + url.search }) }));
+  return html(cardPage({ meta, origin, share: shareView(card, { origin, url, languages, published, owner, next: url.pathname + url.search }) }));
 }
 
 async function route(request, env) {
   const url = new URL(request.url);
-  const state = await readState(env);
-  const languages = state.meta.languages;
-  const L = requestLang(request, url, languages);
-  return withLang(await routeIn(request, env, url, state, L.lang), L, languages, url.pathname);
-}
-
-async function routeIn(request, env, url, state, lang) {
   const origin = originOf(request, env);
   const path = url.pathname;
   const method = request.method;
-  const say = (key, ...args) => t(lang, key, ...args);
 
-  if (path === "/authorize") return authorize(request, env, url, state.meta, lang);
-  if (path === "/login") return login(request, env, url, state.meta, lang);
+  if (path === "/authorize") return authorize(request, env, url);
+  if (path === "/login") return login(request, env, url);
   if (path === "/logout" && method === "POST") return redirect("/", { "Set-Cookie": clearCookie() });
 
+  const state = await readState(env);
   const meta = state.meta;
   const owner = await isOwner(request, env);
   const published = isPublished(meta, env);
@@ -276,25 +219,28 @@ async function routeIn(request, env, url, state, lang) {
     const pass = decodeURIComponent(path.slice("/v/".length));
     const ok = await checkViewPass(env, pass);
     if (!ok) {
-      const page = messagePage({ meta, lang, title: say("msg.linkExpired"), text: say("msg.linkExpiredText"), status: 410 });
+      const page = messagePage({ meta, title: "This link expired", text: "Ask your agent for a fresh link, or sign in to see your log.", status: 410 });
       page.headers.set("Referrer-Policy", "no-referrer");
       return page;
     }
     return new Response(null, {
       status: 302,
-      headers: { Location: viewTarget(url, url.searchParams.get("lang") === lang ? lang : ""), "Set-Cookie": viewCookie(pass, ok.exp), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+      headers: { Location: viewTarget(url), "Set-Cookie": viewCookie(pass, ok.exp), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
     });
   }
   const viewer = owner ? null : await viewerFrom(request, env);
-  const shareCtx = { origin, lang, languages: meta.languages, published, owner, viewer: Boolean(viewer) };
+  const shareCtx = { origin, languages: meta.languages, published, owner, viewer: Boolean(viewer) };
 
   const cardMatch = CARD_PATH.exec(path);
-  if (cardMatch && method === "GET") return cardRoute(request, env, url, cardMatch, { state, origin, owner, viewer: Boolean(viewer), published, lang });
+  if (cardMatch && method === "GET") return cardRoute(request, env, url, cardMatch, { state, origin, owner, viewer: Boolean(viewer), published });
 
   // A shared link on a private log: visitors get the card's own page, never the log.
   if (!published && !owner && !viewer && url.searchParams.has("c") && (path === "/" || path.startsWith("/loop/") || path.startsWith("/exp/"))) {
     const card = await getCard(env.DB, url.searchParams.get("c"));
-    if (card && !card.revoked_at && !card.waiting) return redirect(`/c/${card.id}${url.searchParams.get("lang") === lang ? `?lang=${lang}` : ""}`);
+    if (card && !card.revoked_at && !card.waiting) {
+      const lang = url.searchParams.get("lang");
+      return redirect(`/c/${card.id}${lang && meta.languages.includes(lang) ? `?lang=${lang}` : ""}`);
+    }
   }
 
   if (path === "/public.json") {
@@ -311,22 +257,22 @@ async function routeIn(request, env, url, state, lang) {
     if (owner && url.searchParams.get("view") === "public") {
       return html(
         published
-          ? logPage({ state, lang, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, preview: true, share })
-          : privatePage({ meta, lang, origin, configured: true, hasConnections: true, preview: true })
+          ? logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, preview: true, share })
+          : privatePage({ meta, origin, configured: true, hasConnections: true, preview: true })
       );
     }
     if (owner) {
       const events = await getEvents(env.DB, { limit: 30 });
-      const ready = (await readyCards(env.DB)).map((c) => shareView(c, { ...shareCtx, next: "/" }));
-      return html(logPage({ state, lang, owner, events, url, upgrade: compareVersions(meta.protocolVersion, P.version) < 0, configured: configured(env), hasConnections: connected, published, share, ready }));
+      const ready = (await readyCards(env.DB)).map((c) => shareView(c, { ...shareCtx, url, next: "/" }));
+      return html(logPage({ state, owner, events, url, upgrade: compareVersions(meta.protocolVersion, P.version) < 0, configured: configured(env), hasConnections: connected, published, share, ready }));
     }
     if (viewer) {
       const events = await getEvents(env.DB, { limit: 30 });
-      return html(logPage({ state, lang, owner: true, viewOnly: true, events, url, configured: true, hasConnections: connected, published, share }));
+      return html(logPage({ state, owner: true, viewOnly: true, events, url, configured: true, hasConnections: connected, published, share }));
     }
     if (published)
-      return html(logPage({ state, lang, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, share }), share ? {} : { cache: "public, max-age=30" });
-    return html(privatePage({ meta, lang, origin, configured: configured(env), hasConnections: connected }));
+      return html(logPage({ state, owner: false, publicEvents: await getPublicEvents(env.DB, PUBLIC_TOOLS), url, configured: true, share }), share ? {} : { cache: "public, max-age=30" });
+    return html(privatePage({ meta, origin, configured: configured(env), hasConnections: connected }));
   }
 
   // An experiment's page: the same access rule as a loop's page.
@@ -336,8 +282,8 @@ async function routeIn(request, env, url, state, lang) {
     if (raw !== code) return redirect(`/exp/${code}${url.search}`);
     const sees = owner || Boolean(viewer);
     const share = /^EXP-\d+$/.test(code) ? await shareFor(request, env, url, "exp", code, shareCtx) : null;
-    const page = /^EXP-\d+$/.test(code) ? expPage({ state, lang, owner: sees, viewOnly: !owner && sees, code, url, share }) : null;
-    if (!page) return messagePage({ meta, lang, title: say("msg.notFound"), text: say("msg.noExperiment", code), status: 404 });
+    const page = /^EXP-\d+$/.test(code) ? expPage({ state, owner: sees, viewOnly: !owner && sees, code, url, share }) : null;
+    if (!page) return messagePage({ meta, title: "Not found", text: `No experiment has the code ${code}.`, status: 404 });
     return html(page, sees || share ? {} : { cache: "public, max-age=30" });
   }
 
@@ -351,19 +297,19 @@ async function routeIn(request, env, url, state, lang) {
       ? (await getEvents(env.DB, { target: code, limit: 200 })).filter((e) => String(e.target || "").split(",").includes(code))
       : [];
     const share = await shareFor(request, env, url, "loop", code, shareCtx);
-    const page = loopPage({ state, lang, owner: sees, viewOnly: !owner && sees, code, events, connected: owner && (await hasConnections(env.DB)), url, share });
-    if (!page) return messagePage({ meta, lang, title: say("msg.notFound"), text: say("msg.noLoop", code), status: 404 });
+    const page = loopPage({ state, owner: sees, viewOnly: !owner && sees, code, events, connected: owner && (await hasConnections(env.DB)), url, share });
+    if (!page) return messagePage({ meta, title: "Not found", text: `No loop has the code ${code}.`, status: 404 });
     return html(page, sees || share ? {} : { cache: "public, max-age=30" });
   }
 
   // Owner only from here.
   if (!owner) {
     if (method === "GET") return redirect(withQuery("/login", "next", path + url.search));
-    return messagePage({ meta, lang, title: say("msg.signInFirst"), text: say("msg.sessionEnded"), status: 401 });
+    return messagePage({ meta, title: "Sign in first", text: "Your session ended. Sign in and try again.", status: 401 });
   }
 
-  if (path === "/connect" && method === "GET") return html(connectPage({ meta, lang, origin }));
-  if (path === "/connections" && method === "GET") return html(connectionsPage({ meta, lang, agents: await listAgents(env.DB), url }));
+  if (path === "/connect" && method === "GET") return html(connectPage({ meta, origin }));
+  if (path === "/connections" && method === "GET") return html(connectionsPage({ meta, agents: await listAgents(env.DB), url }));
   if (path === "/export" && method === "GET") {
     const snap = await snapshot(env);
     return new Response(JSON.stringify(snap, null, 2), {
@@ -375,10 +321,10 @@ async function routeIn(request, env, url, state, lang) {
     });
   }
   if (path === "/owner/action" && method === "POST") {
-    if (!sameOrigin(request, url.origin)) return messagePage({ meta, lang, title: say("msg.blocked"), text: say("msg.otherSite"), status: 403 });
-    return ownerAction(request, env, meta, lang);
+    if (!sameOrigin(request, url.origin)) return messagePage({ meta, title: "Blocked", text: "This form came from another site.", status: 403 });
+    return ownerAction(request, env, meta);
   }
-  return messagePage({ meta, lang, title: say("msg.notFound"), text: say("msg.noPage"), status: 404 });
+  return messagePage({ meta, title: "Not found", text: "This page doesn't exist.", status: 404 });
 }
 
 const OWNER_PAGE_OPS = {
@@ -413,39 +359,37 @@ function linksFromForm(f) {
   return links.length ? links : null;
 }
 
-function doneMessage(op, args, lang) {
-  const say = (key) => t(lang, `done.${key}`);
-  if (op !== "set_meta") return say("saved");
-  if ("ownerName" in args) return say("name");
-  if ("about" in args) return say(args.about ? "about" : "aboutRemoved");
-  if (!("links" in args)) return say("public");
-  if (args.links?.length) return say("links");
-  return say(args.links ? "noLinks" : "linksRemoved");
+function doneMessage(op, args) {
+  if (op !== "set_meta") return "Saved.";
+  if ("ownerName" in args) return "Your name is saved.";
+  if ("about" in args) return args.about ? "Your line is saved." : "Your line is removed.";
+  if (!("links" in args)) return "Your log is public.";
+  if (args.links?.length) return "Your links are saved.";
+  return args.links ? "Saved. Nobody will ask for your links again." : "Your links are removed.";
 }
 
-async function ownerAction(request, env, meta, lang) {
+async function ownerAction(request, env, meta) {
   const form = await request.formData();
   const op = String(form.get("op") || "");
-  const say = (key, ...args) => t(lang, key, ...args);
 
   if (op === "create_key") {
     const name = String(form.get("name") || "").trim();
-    if (!name) return redirect(withQuery("/connections", "error", say("done.keyName")));
+    if (!name) return redirect(withQuery("/connections", "error", "A key needs a name."));
     const key = await createApiKey(env.DB, { name, access: form.get("access") === "owner" ? "owner" : "agent" });
     await logEvent(env.DB, { at: new Date().toISOString(), actor: OWNER_USER, tool: "create_api_key", target: key.id });
-    return html(connectionsPage({ meta, lang, agents: await listAgents(env.DB), url: new URL(request.url), newKey: key }));
+    return html(connectionsPage({ meta, agents: await listAgents(env.DB), url: new URL(request.url), newKey: key }));
   }
 
   if (op === "revoke") {
     const id = String(form.get("id") || "");
     const agent = (await listAgents(env.DB)).find((a) => a.id === id);
-    if (!agent || !(await revokeAgent(env.DB, id))) return redirect(withQuery("/connections", "error", say("done.noConnection")));
+    if (!agent || !(await revokeAgent(env.DB, id))) return redirect(withQuery("/connections", "error", "No active connection has this id."));
     if (agent.kind === "oauth" && agent.client_id) {
       const grants = await env.OAUTH_PROVIDER.listUserGrants(OWNER_USER);
       for (const g of grants.items.filter((x) => x.clientId === agent.client_id)) await env.OAUTH_PROVIDER.revokeGrant(g.id, OWNER_USER);
     }
     await logEvent(env.DB, { at: new Date().toISOString(), actor: OWNER_USER, tool: "revoke_connection", target: id });
-    return redirect(withQuery("/connections", "done", say("done.revoked", agent.name)));
+    return redirect(withQuery("/connections", "done", `${agent.name} is revoked.`));
   }
 
   // The copy buttons on a card: the first copy means the person has the link, so agents stop offering it.
@@ -458,74 +402,69 @@ async function ownerAction(request, env, meta, lang) {
   if (op === "card_images") {
     const next = safeNext(String(form.get("next") || "/"));
     const card = await getCard(env.DB, String(form.get("id") || ""));
-    if (!card || card.revoked_at || card.waiting) return redirect(addQuery(next, "error", say("done.noImages")));
+    if (!card || card.revoked_at || card.waiting) return redirect(addQuery(next, "error", "This card can't make images now."));
     await requestPostImages(env, card, meta.languages, new Date().toISOString());
     const on = await writer(env).queueShots(originOf(request, env));
-    return redirect(addQuery(next, on ? "done" : "error", say(on ? "done.imagesComing" : "done.imagesOff")));
+    return redirect(addQuery(next, on ? "done" : "error", on ? "Images to post are on the way. Reload in a minute." : "Card images are off on this log (CARD_IMAGES or Browser Rendering)."));
   }
 
-  if (!Object.hasOwn(OWNER_PAGE_OPS, op)) return redirect(withQuery("/", "error", say("done.unknown")));
+  if (!Object.hasOwn(OWNER_PAGE_OPS, op)) return redirect(withQuery("/", "error", "Unknown action."));
   const args = OWNER_PAGE_OPS[op](form, meta);
   const r = await writer(env).write({ op, args, actor: OWNER_USER, access: "owner", directText: true, origin: originOf(request, env) });
-  const cardNote = r.cardsReady?.length || r.moment?.card?.status === "ready" ? say("done.cardReady") : "";
-  const done = (op === "adopt_protocol" && r.ok ? adoptedMessage(r.result, lang) : doneMessage(op, args, lang)) + cardNote;
-  const error = r.ok ? "" : errorText(r, lang);
+  const cardNote = r.cardsReady?.length || r.moment?.card?.status === "ready" ? " Your card is ready." : "";
+  const done = (op === "adopt_protocol" && r.ok ? adoptedMessage(r.result) : doneMessage(op, args)) + cardNote;
   // app.js asks for JSON to approve a loop or save the header without leaving the page.
   if (request.headers.get("Accept")?.includes("application/json"))
-    return Response.json(r.ok ? { ok: true, done } : { ok: false, error }, { status: r.ok ? 200 : 400 });
-  if (!r.ok) return redirect(withQuery("/", "error", error));
+    return Response.json(r.ok ? { ok: true, done } : { ok: false, error: r.error }, { status: r.ok ? 200 : 400 });
+  if (!r.ok) return redirect(withQuery("/", "error", r.error));
   return redirect(withQuery("/", "done", done));
 }
 
-// A refused write in the page's language. Messages without words of their own stay as the writer said them.
-const errorText = (r, lang) => writeError(lang, r);
-
-function adoptedMessage({ to, takesEffect, breaksNewRules }, lang) {
-  const cycle = /(\d+)$/.exec(takesEffect)?.[1];
-  const when = takesEffect === "now" || !cycle ? t(lang, "done.adopted", to) : t(lang, "done.takesEffect", to, cycle);
+function adoptedMessage({ to, takesEffect, breaksNewRules }) {
+  const when = takesEffect === "now" ? `Protocol v${to} is adopted.` : `Protocol v${to} takes effect ${takesEffect}.`;
   const n = breaksNewRules.length;
-  return n ? t(lang, "done.breaks", when, n) : when;
+  return n ? `${when} ${n} ${n === 1 ? "item breaks" : "items break"} the new rules. They're listed under Waiting for you.` : when;
 }
 
 // ---------------------------------------------------------------------------
 // Sign-in
 
-async function login(request, env, url, meta, lang) {
+async function login(request, env, url) {
+  const meta = (await readState(env)).meta;
   const isConfigured = configured(env);
-  const say = (key) => t(lang, `msg.${key}`);
-  if (request.method === "GET") return html(loginPage({ meta, lang, next: safeNext(url.searchParams.get("next")), configured: isConfigured }));
-  if (request.method !== "POST") return messagePage({ meta, lang, title: say("notAllowed"), text: say("useSignIn"), status: 405 });
-  if (!sameOrigin(request, url.origin)) return messagePage({ meta, lang, title: say("blocked"), text: say("otherSite"), status: 403 });
+  if (request.method === "GET") return html(loginPage({ meta, next: safeNext(url.searchParams.get("next")), configured: isConfigured }));
+  if (request.method !== "POST") return messagePage({ meta, title: "Not allowed", text: "Use the sign-in form.", status: 405 });
+  if (!sameOrigin(request, url.origin)) return messagePage({ meta, title: "Blocked", text: "This form came from another site.", status: 403 });
 
   const form = await request.formData();
   const next = safeNext(String(form.get("next") || "/"));
   const ip = request.headers.get("CF-Connecting-IP") || "local";
   if (await loginLocked(env, ip))
-    return html(loginPage({ meta, lang, next, configured: isConfigured, error: say("tooMany") }), { status: 429 });
+    return html(loginPage({ meta, next, configured: isConfigured, error: "Too many wrong passwords. Wait 15 minutes and try again." }), { status: 429 });
   if (!(await checkPassword(env, String(form.get("password") || "")))) {
     await recordFailure(env, ip);
-    return html(loginPage({ meta, lang, next, configured: isConfigured, error: say("wrongPassword") }), { status: 401 });
+    return html(loginPage({ meta, next, configured: isConfigured, error: "Wrong password." }), { status: 401 });
   }
   return redirect(next, { "Set-Cookie": await sessionCookie(env) });
 }
 
 // OAuth consent: the owner signs in, sees which app asks, and allows or denies.
-async function authorize(request, env, url, meta, lang) {
+async function authorize(request, env, url) {
   const oauth = env.OAUTH_PROVIDER;
-  const say = (key) => t(lang, `msg.${key}`);
+  const meta = (await readState(env)).meta;
   if (!(await isOwner(request, env))) {
     if (request.method === "GET") return redirect(withQuery("/login", "next", url.pathname + url.search));
-    return messagePage({ meta, lang, title: say("signInFirst"), text: say("sessionEndedApp"), status: 401 });
+    return messagePage({ meta, title: "Sign in first", text: "Your session ended. Start the connection again from your app.", status: 401 });
   }
 
   if (request.method === "GET") {
     const authRequest = await oauth.parseAuthRequest(request);
     const details = await oauth.describeConsent(authRequest);
     const consent = await oauth.beginConsent(authRequest);
-    return html(consentPage({ meta, lang, details, handle: consent.handle }), { headers: consent.headers, formAction: false });
+    return html(consentPage({ meta, details, handle: consent.handle }), { headers: consent.headers, formAction: false });
   }
 
-  if (request.method !== "POST") return messagePage({ meta, lang, title: say("notAllowed"), text: say("useConsent"), status: 405 });
+  if (request.method !== "POST") return messagePage({ meta, title: "Not allowed", text: "Use the consent form.", status: 405 });
   const form = await request.formData();
   const handle = String(form.get("handle") || "");
   if (form.get("decision") !== "approve") {

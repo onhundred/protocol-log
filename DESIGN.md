@@ -383,8 +383,6 @@ Three areas (Relationships 4 columns, Personal 4 columns, Company 3 columns) of 
 
 **Isolation (the signature interaction).** Tapping an area label isolates its cells: the other areas drop to 8% opacity and the Readout counts to that area's percentage. Stage pills and legend items isolate by state instead. Only one isolation is active at a time; choosing an area clears a state and vice versa, tapping the active control again clears it, and Escape clears everything. With a mouse, hovering any of these controls previews its isolation and leaving restores the pressed one. Every control reports its pressed state to assistive technology.
 
-**A list of 10.** A run that starts at 10 loops has no area columns. Its grid is 1 block of tiles, 4 per row, grouped by area (Relationships, Personal, Company) and by code inside each, with empty tiles last. The block is 576px at most, so the legend fits beside it on wide screens. Each tile shows the loop's area at the top (mono, 11px) and its name at the bottom (sans 600, up to 4 lines). Tiles use the same fill ladder as the cells, with 10px corners and 14px gaps. Text is Bone Paper on the lower steps and Darkroom Black on delegated and autonomous. A private partner loop shows its area and "Private loop". There are no area pills above the block. On phones the block becomes 2 tiles per row. The small grid in the readout stays plain squares, 5 by 2, with no names.
-
 ### Named Rules
 **The 44px Rule.** Every tap target is at least 44px tall. Small visual forms (area pills, stage pills) are drawn inside a 44px hit area, never shrunk to their drawn size.
 

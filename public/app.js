@@ -1,13 +1,4 @@
 (() => {
-  // The page's words, in its language: layout() writes them on <body>. say("open", { code }) fills {code}.
-  let WORDS = {};
-  try {
-    WORDS = JSON.parse(document.body.dataset.words || "{}");
-  } catch {}
-  const say = (key, vars = {}) => (WORDS[key] || "").replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
-  // A grid area's key (data-area) in the words of the grid's tip labels.
-  const areaWord = (labels, key) => labels.areaWords?.[key] || key;
-
   // A prompt box is a textarea the person can edit; other copy sources are plain text.
   const sourceText = (source) => ("value" in source ? source.value : source.textContent);
 
@@ -20,7 +11,7 @@
     try {
       await navigator.clipboard.writeText(sourceText(source));
       const label = btn.innerHTML;
-      btn.textContent = say("copied");
+      btn.textContent = "COPIED";
       setTimeout(() => {
         btn.innerHTML = label;
         btn.closest("details[data-menu]")?.removeAttribute("open");
@@ -191,7 +182,7 @@
       if (fix) {
         fix.dataset.fix = btn.dataset.fixPrompt || "";
         fix.dataset.target = btn.dataset.code;
-        fix.setAttribute("aria-label", say("fixWith", { code: btn.dataset.code }));
+        fix.setAttribute("aria-label", `Fix ${btn.dataset.code} with AI`);
       }
       ruleDialog.querySelector("[data-rule-list]").replaceChildren(
         ...JSON.parse(btn.dataset.ruleBreak || "[]").map((m) => {
@@ -240,12 +231,12 @@
       const a = document.createElement("a");
       a.className = "icon-btn";
       a.href = `/loop/${encodeURIComponent(code)}`;
-      a.title = say("open", { code });
-      a.setAttribute("aria-label", say("open", { code }));
+      a.title = `Open ${code}`;
+      a.setAttribute("aria-label", `Open ${code}`);
       a.append(icon.content.cloneNode(true));
       const flag = document.createElement("span");
       flag.className = "flag-ok";
-      flag.textContent = say("approved");
+      flag.textContent = "APPROVED";
       form.previousElementSibling.querySelector("b").after(" ", flag);
       form.replaceWith(a);
     };
@@ -260,7 +251,7 @@
         const res = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
         const r = await res.json();
         if (!r.ok) {
-          location.href = `/?error=${encodeURIComponent(r.error || say("notApproved"))}`;
+          location.href = `/?error=${encodeURIComponent(r.error || "The loop wasn't approved.")}`;
           return;
         }
         let k = 0;
@@ -288,15 +279,15 @@
           return i;
         })
       );
-      q("[data-approve-title]").textContent = allBox.checked ? say("approveAll", { n: all.length }) : say("approveOne");
+      q("[data-approve-title]").textContent = allBox.checked ? `Approve all ${all.length} loops?` : "Approve this loop?";
       q("[data-approve-code]").textContent = one.code;
       q("[data-approve-name]").textContent = one.name;
       q("[data-approve-loop]").hidden = allBox.checked;
       const rep = q("[data-approve-replaces]");
-      rep.textContent = one.replaces ? say(one.replaces.includes(",") ? "replacesMany" : "replacesOne", { codes: one.replaces }) : "";
+      rep.textContent = one.replaces ? `It replaces ${one.replaces}, which ${one.replaces.includes(",") ? "are" : "is"} retired at the same time.` : "";
       rep.hidden = allBox.checked || !one.replaces;
-      q("[data-approve-submit]").textContent = allBox.checked ? say("approveAllButton", { n: all.length }) : say("approveButton");
-      q("[data-approve-all-label]").textContent = say("approveAllLabel", { n: all.length });
+      q("[data-approve-submit]").textContent = allBox.checked ? `APPROVE ALL ${all.length}` : "APPROVE";
+      q("[data-approve-all-label]").textContent = `Approve all ${all.length} proposed loops that pass the rules`;
     };
 
     document.addEventListener("submit", (e) => {
@@ -334,23 +325,20 @@
     bar.hidden = false;
   });
 
-  // The small grid in the readout opens and closes the full one. Each toggle is a history entry, so Back undoes it.
+  // The small grid in the readout opens and closes the full one.
   const gridToggle = document.querySelector("[data-grid-toggle]");
   const fullGrid = document.getElementById("activity");
   if (gridToggle && fullGrid) {
     const setOpen = (open) => {
       fullGrid.toggleAttribute("data-open", open);
-      // pushState doesn't update :target, so app.css needs an explicit closed state.
-      fullGrid.toggleAttribute("data-closed", !open);
       gridToggle.setAttribute("aria-expanded", String(open));
+      // Without the hash, :target in app.css stops holding it open.
+      if (!open && location.hash === "#activity") history.replaceState(null, "", location.pathname + location.search);
     };
     setOpen(location.hash === "#activity");
-    addEventListener("popstate", () => setOpen(location.hash === "#activity"));
     gridToggle.addEventListener("click", (e) => {
       e.preventDefault();
-      const open = !fullGrid.hasAttribute("data-open");
-      history.pushState(null, "", open ? "#activity" : location.pathname + location.search);
-      setOpen(open);
+      setOpen(!fullGrid.hasAttribute("data-open"));
     });
     gridToggle.addEventListener("keydown", (e) => {
       if (e.key !== " ") return;
@@ -363,18 +351,13 @@
   const stack = document.querySelector("[data-level-stack]");
   if (stack) {
     const now = stack.querySelector(".lvl-now");
-    const others = stack.querySelector(".lvl-others");
     const hover = matchMedia("(hover: hover)");
     let closeTimer;
     const setOpen = (open) => {
       clearTimeout(closeTimer);
       stack.toggleAttribute("data-open", open);
       now.setAttribute("aria-expanded", String(open));
-      // Hidden rows stay out of the tab order until the stack opens.
-      others.inert = !open;
     };
-    // A row opens its level's dialog (data-open-dialog), and the stack folds away behind it.
-    others.addEventListener("click", (e) => e.target.closest("[data-open-dialog]") && setOpen(false));
     stack.addEventListener("mouseenter", () => hover.matches && setOpen(true));
     stack.addEventListener("mouseleave", () => {
       if (hover.matches) closeTimer = setTimeout(() => setOpen(false), 120);
@@ -415,23 +398,13 @@
     });
   }
 
-  // ADD NEW LOOP: the optional answer is written into the prompt until the person edits the prompt by hand.
-  // The prompt keeps the person's edits between openings.
+  // ADD NEW LOOP: the prompt keeps the person's edits between openings.
   const addDialog = document.querySelector("[data-add-loop-dialog]");
   if (addDialog && typeof addDialog.showModal === "function") {
-    const answer = addDialog.querySelector("#add-loop-answer");
-    const prompt = addDialog.querySelector("#add-loop-prompt");
-    let edited = false;
-    answer.addEventListener("input", () => {
-      if (edited) return;
-      const text = answer.value.trim().replace(/[.!?]+$/, "");
-      prompt.value = text ? addDialog.dataset.template.replace("{answer}", text) : addDialog.dataset.default;
-    });
-    prompt.addEventListener("input", () => (edited = true));
     document.addEventListener("click", (e) => {
       if (!e.target.closest("[data-add-loop]")) return;
       openDialog(addDialog);
-      answer.focus();
+      addDialog.querySelector("#add-loop-prompt").focus();
     });
   }
 
@@ -456,12 +429,12 @@
       const res = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
       const r = await res.json();
       if (r.ok) {
-        location.href = `/?done=${encodeURIComponent(r.done || say("saved"))}`;
+        location.href = `/?done=${encodeURIComponent(r.done || "Saved.")}`;
         return;
       }
-      error.textContent = r.error || say("notSaved");
+      error.textContent = r.error || "This wasn't saved.";
     } catch {
-      error.textContent = say("offline");
+      error.textContent = "This wasn't saved. Check your connection and try again.";
     }
     error.hidden = false;
     submit.disabled = false;
@@ -556,9 +529,7 @@
   // Each cell's row and column across the whole grid. The build drains from the top left; isolation flips in a
   // wave that starts at the legend's side.
   const boxes = [...grid.querySelectorAll(".cells")];
-  // A list of 10 sets --tile-cols in CSS (2 on phones), so its wave follows the columns on screen.
-  const colsOf = (box) =>
-    Number(getComputedStyle(box).getPropertyValue("--tile-cols")) || Number(box.style.getPropertyValue("--cols")) || 1;
+  const colsOf = (box) => Number(box.style.getPropertyValue("--cols")) || 1;
   const totalCols = boxes.reduce((t, box) => t + colsOf(box), 0);
   const maxRows = Math.max(0, ...boxes.map((box) => Math.ceil(box.children.length / colsOf(box))));
   const cellPos = new Map();
@@ -573,7 +544,7 @@
   const legendBelow = () => legendList && legendList.getBoundingClientRect().top >= grid.getBoundingClientRect().bottom - 1;
 
   // Build: the first time the grid is on screen it runs like a split-flap board. Blank flaps climb to solid green,
-  // the board holds with every square handed off (100 of 100, or 10 of 10), then drains in a wave from the top left, each square flipping down the ladder
+  // the board holds on 100 of 100, then drains in a wave from the top left, each square flipping down the ladder
   // to its real state and slowing as it falls. The flaps exist only while they turn.
   // The figure counts along: it shows the points of the cards facing up, then lands on the server's value.
   // "measured" is a flap face only: a measured Still yours square shows filled.
@@ -700,13 +671,12 @@
   const gridCells = [...grid.querySelectorAll(".cell")];
   const levelCounts = {};
   gridCells.forEach((el) => (levelCounts[el.dataset.s] = (levelCounts[el.dataset.s] || 0) + 1));
-  const areaCounts = [...grid.querySelectorAll("[data-area-btn]")].map((btn) => {
+  const areaCounts = [...grid.querySelectorAll(".area")].map((area) => {
     const n = document.createElement("span");
     n.className = "n";
     n.hidden = true;
-    btn.append(n);
-    const area = btn.closest(".area");
-    return { n, cells: [...(area || grid).querySelectorAll(area ? ".cell" : `.cell[data-area="${btn.dataset.areaBtn}"]`)] };
+    area.querySelector(".area-label")?.append(n);
+    return { n, cells: [...area.querySelectorAll(".cell")] };
   });
   const jobs = new Map();
   const turning = new Set();
@@ -782,10 +752,9 @@
     li.setAttribute("aria-pressed", "false");
     li.addEventListener("mouseenter", () => previewLevel(li.dataset.level));
     li.addEventListener("mouseleave", () => previewLevel(lockedLevel));
-    // GET HELP inside the empty item opens its own dialog; it must not toggle the item.
-    li.addEventListener("click", (e) => e.target.closest(".legend-help") || toggleLock(li));
+    li.addEventListener("click", () => toggleLock(li));
     li.addEventListener("keydown", (e) => {
-      if ((e.key !== "Enter" && e.key !== " ") || e.target.closest(".legend-help")) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       toggleLock(li);
     });
@@ -805,24 +774,18 @@
   };
 
   const showTip = (cell, touch = false) => {
-    const empty = cell?.dataset.s === "empty";
-    if (!cell || (!cell.dataset.loop && !empty)) return hideTip();
+    if (!cell || !cell.dataset.loop) return hideTip();
     if (cell === tipCell) return;
     tipCell = cell;
     const d = cell.dataset;
-    const lines = empty
-      ? [
-          ["tip-code", labels.levels && labels.levels.empty],
-          ["tip-note", labels.empty && labels.empty.replace("{area}", areaWord(labels, cell.closest("[data-area]")?.dataset.area || ""))],
-        ]
-      : [
-          ["tip-code", d.loop],
-          ["tip-name", d.name],
-          ["", labels.levels && labels.levels[d.s] + ("measured" in d && labels.measured ? ` · ${labels.measured}` : "")],
-          ["tip-flag", labels.flags && labels.flags[d.flag]],
-          ["failed" in d ? "tip-failed" : "", labels.outcomes && labels.outcomes[d.o]],
-          ["tip-flag", touch && labels.open],
-        ];
+    const lines = [
+      ["tip-code", d.loop],
+      ["tip-name", d.name],
+      ["", labels.levels && labels.levels[d.s] + ("measured" in d && labels.measured ? ` · ${labels.measured}` : "")],
+      ["tip-flag", labels.flags && labels.flags[d.flag]],
+      ["failed" in d ? "tip-failed" : "", labels.outcomes && labels.outcomes[d.o]],
+      ["tip-flag", touch && labels.open],
+    ];
     tip.replaceChildren(
       ...lines
         .filter((l) => l[1])
@@ -841,44 +804,6 @@
     tip.style.top = (r.top - h - 8 < 8 ? r.bottom + 8 : r.top - h - 8) + "px";
   };
 
-  // FILL THIS LOOP: the answer is written into the prompt until the person edits the prompt by hand.
-  const fillOne = document.querySelector("[data-fill-one]");
-  let fillArea = "";
-  let resetFill = () => {};
-  if (fillOne) {
-    const answer = fillOne.querySelector("#fill-one-answer");
-    const prompt = fillOne.querySelector("#fill-one-prompt");
-    const menu = fillOne.querySelector("details[data-menu]");
-    const areas = JSON.parse(fillOne.dataset.areas || "{}");
-    let edited = false;
-    const sync = () => {
-      const text = answer.value.trim().replace(/[.!?]+$/, "");
-      menu.toggleAttribute("data-disabled", !text);
-      if (edited) return;
-      prompt.value = fillOne.dataset.template.replace("{area}", areas[fillArea] || "").replace("{answer}", text);
-    };
-    answer.addEventListener("input", sync);
-    prompt.addEventListener("input", () => (edited = true));
-    menu.querySelector("summary").addEventListener("click", (e) => {
-      if (!menu.hasAttribute("data-disabled")) return;
-      e.preventDefault();
-      answer.focus();
-    });
-    resetFill = () => {
-      edited = false;
-      sync();
-    };
-  }
-
-  // An empty square opens the dialog that explains how to fill it.
-  const emptyDialog = document.querySelector("[data-empty-dialog]");
-  const openEmpty = (cell) => {
-    fillArea = cell.closest("[data-area]")?.dataset.area || "";
-    resetFill();
-    hideTip();
-    openDialog(emptyDialog);
-  };
-
   // A click opens the loop's page. On touch the first tap shows the tooltip and the second opens it.
   let pointer = "mouse";
   grid.addEventListener("pointerdown", (e) => (pointer = e.pointerType));
@@ -887,11 +812,10 @@
   });
   grid.addEventListener("pointerleave", hideTip);
   grid.addEventListener("click", (e) => {
-    const cell = e.target.closest(".cell[data-loop], .cell[data-s='empty']");
+    const cell = e.target.closest(".cell[data-loop]");
     if (!cell) return;
     e.stopPropagation();
-    if (!cell.dataset.loop) emptyDialog ? openEmpty(cell) : showTip(cell);
-    else if (pointer === "mouse" || cell === tipCell) location.href = `/loop/${encodeURIComponent(cell.dataset.loop)}`;
+    if (pointer === "mouse" || cell === tipCell) location.href = `/loop/${encodeURIComponent(cell.dataset.loop)}`;
     else showTip(cell, true);
   });
   document.addEventListener("click", hideTip);

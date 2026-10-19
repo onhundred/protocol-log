@@ -17,15 +17,12 @@ import {
   formatPoints,
   gridChange,
   PROFILE_LINKS,
-  isFallback,
   isMeasured,
   levelName,
   linkIssues,
-  listSize,
   metrics,
   nameIssues,
   normalizeLink,
-  pickText,
   profileMissing,
   progressNote,
   publicActivity,
@@ -253,35 +250,6 @@ test("decide and choose fail from v1.1, and still pass on a v1.0 log", async () 
   assert.ok(validate(state).some((v) => v.rule === "name" && v.target === state.loops[0].code));
   state.meta.protocolVersion = "1.0";
   assert.ok(!validate(state).some((v) => v.rule === "name"));
-});
-
-test("Spanish names and text follow their own word lists from v1.7", async () => {
-  assert.match(nameIssues("Decidir qué cenar", "es", "1.7")[0], /failing verb \(decidir\)\. Name the result instead: reservar/);
-  assert.match(nameIssues("Dar seguimiento a la demo", "es", "1.7")[0], /failing verb \(dar seguimiento\)/);
-  assert.deepEqual(nameIssues("Decidir qué cenar", "es", "1.6"), []);
-  assert.deepEqual(nameIssues("Reservar la cena del viernes", "es", "1.7"), []);
-  assert.deepEqual(nameIssues("Decide what's for dinner", "es", "1.7"), [], "English verbs don't apply to Spanish text");
-  assert.match(voiceIssues("Hacer la tarea semanal", "es", "1.7").join(" "), /retired word/);
-  assert.deepEqual(voiceIssues("Hacer la tarea semanal", "es", "1.6"), []);
-  assert.deepEqual(voiceIssues("Run the weekly tarea", "en", "1.7"), []);
-  const state = await seed();
-  state.meta.languages = ["en", "es"];
-  state.loops[0].name.es = "Decidir dónde comer";
-  assert.ok(validate(state).some((v) => v.rule === "name" && v.target === state.loops[0].code && v.message.includes("(es)")));
-  state.meta.protocolVersion = "1.6";
-  assert.ok(!validate(state).some((v) => v.rule === "name"));
-});
-
-test("pickText falls back to the main language, and isFallback says when it did", () => {
-  const name = { en: "Pay the rent", es: "" };
-  assert.equal(pickText(name, "es", "en"), "Pay the rent");
-  assert.equal(pickText({ en: "Pay the rent", es: "Pagar la renta" }, "es", "en"), "Pagar la renta");
-  assert.equal(pickText({ es: "Pagar la renta" }, "fr", "en"), "Pagar la renta");
-  assert.equal(pickText("plain", "es"), "plain");
-  assert.equal(pickText(null, "es"), "");
-  assert.equal(isFallback(name, "es"), true);
-  assert.equal(isFallback(name, "en"), false);
-  assert.equal(isFallback({ en: "", es: "" }, "es"), false);
 });
 
 test("the change note shows for 1 cycle after adoption", () => {
@@ -571,65 +539,4 @@ test("cardHeadline: starred words are the accent on the image and never reach pl
   assert.ok(!plain.includes("*") && plain.includes(String(facts.tiles.length)));
   for (const [moment, list] of Object.entries(P.cards.headlines))
     for (const h of list) for (const lang of ["en", "es"]) assert.equal((h[lang].match(/\*/g) || []).length % 2, 0, `${moment}: stars come in pairs`);
-});
-
-// ---------------------------------------------------------------------------
-// A list of 10
-
-const STARTER = ["C-SAL-01", "P-HOM-02", "R-FAM-01", "P-HOM-01", "C-SUP-01", "R-PAR-01", "P-FIN-01", "C-OPS-01"];
-const starter = (levels = {}) => ({
-  meta: { mode: "building", listSize: 10, languages: ["en"], protocolVersion: P.version },
-  loops: STARTER.map((c) => loopOf(c, levels[c] || "still")),
-  experiments: [],
-});
-const LABELS = { areas: { relationships: "RELATIONSHIPS", personal: "PERSONAL", company: "COMPANY" }, private: "Private loop", empty: "Empty" };
-
-test("listSize: 10 or 100, and anything else reads as 100", () => {
-  assert.equal(listSize({}), 100);
-  assert.equal(listSize(undefined), 100);
-  assert.equal(listSize({ listSize: 10 }), 10);
-  assert.equal(listSize({ listSize: 50 }), 100);
-});
-
-test("Handed off at 10 is points out of 10: 3.5 of 10", () => {
-  const loops = ["delegated", "autonomous", "delegated", "assisted", ...Array(6).fill("still")].map((level, i) => ({ code: `P-HOM-${String(i + 1).padStart(2, "0")}`, level }));
-  const m = metrics(loops, P.version, 10);
-  assert.equal(m.delegatedPoints, 3.5);
-  assert.equal(m.size, 10);
-  assert.equal(formatPoints(m.delegatedPoints, m.size), "3.5 of 10");
-  assert.equal(metrics(loops.slice(0, 4), P.version, 10).delegatedPoints, 3.5, "empty squares count 0, not against the points");
-  assert.equal(derive({ meta: { listSize: 10 }, loops, experiments: [] }).metrics.delegatedPoints, 3.5);
-});
-
-test("a frozen list of 10 holds exactly 10 loops", () => {
-  const ten = { meta: { mode: "frozen", listSize: 10, languages: ["en"] }, loops: [...STARTER, "P-HOM-03", "C-SAL-02"].map((c) => loopOf(c)), experiments: [] };
-  assert.ok(!validate(ten).some((v) => v.rule === "count"));
-  ten.loops.pop();
-  assert.ok(validate(ten).some((v) => v.rule === "count" && v.message.includes("exactly 10")));
-  const over = { meta: { mode: "building", listSize: 10, languages: ["en"] }, loops: Array.from({ length: 11 }, (_, i) => loopOf(`P-HOM-${String(i + 1).padStart(2, "0")}`)), experiments: [] };
-  assert.ok(validate(over).some((v) => v.rule === "count"));
-});
-
-test("grid at 10: 1 block of 4 per row, grouped by area, empty tiles last", () => {
-  const s = starter({ "C-SAL-01": "autonomous", "P-HOM-01": "delegated" });
-  const view = publicView(s);
-  assert.equal(view.meta.listSize, 10);
-  const { html, columns } = renderGrid(view, { labels: LABELS, metric: "delegated" });
-  assert.equal(columns, "repeat(4, minmax(0, 1fr))");
-  assert.ok(html.includes('style="--cols:4"'));
-  assert.ok(!html.includes('class="area"'), "no area columns, so area focus can't dim the whole block");
-  const tiles = [...html.matchAll(/<li class="cell tile"([^>]*)>/g)].map((m) => m[1]);
-  assert.equal(tiles.length, 10);
-  const codes = tiles.map((a) => a.match(/data-loop="([^"]+)"/)?.[1] || null);
-  assert.deepEqual(codes, ["R-FAM-01", "R-PAR-01", "P-FIN-01", "P-HOM-01", "P-HOM-02", "C-OPS-01", "C-SAL-01", "C-SUP-01", null, null]);
-  assert.ok(tiles.slice(8).every((a) => a.includes('data-s="empty"') && !a.includes("data-area")), "empty tiles belong to no area");
-  assert.ok(tiles[0].includes('data-area="relationships"') && tiles[6].includes('data-area="company"'));
-  assert.ok(html.includes('<span class="tile-area">COMPANY</span><span class="tile-name">Handle c-sal-01</span>'));
-  assert.ok(!html.includes(">C-SAL-01<"), "tiles show the area, not the loop code");
-  assert.ok(html.includes('<span class="tile-area">RELATIONSHIPS</span><span class="tile-name">Private loop</span>'), "a private loop shows its area but no name");
-  assert.ok(!html.includes("data-area-btn") && !html.includes("area-chips"), "a list of 10 has no area buttons");
-
-  const mini = renderGrid(view, { labels: LABELS, compact: true }).html;
-  assert.equal(mini.match(/<i class="cell"/g).length, 10);
-  assert.ok(!mini.includes("tile") && !mini.includes("area-letter") && !mini.includes("data-area-btn"));
 });

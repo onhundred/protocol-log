@@ -82,14 +82,14 @@ const bet = (slot, loops, extra = {}) => ({
 });
 
 describe("tools after this change", () => {
-  it("lists 42 tools for an owner, with the merged ones and without the old connection tools", async () => {
+  it("lists 40 tools for an owner, with the merged ones and without the old connection tools", async () => {
     const owner = (await createApiKey(env.DB, { name: "claude", access: "owner" })).key;
     const init = await mcp(owner, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
     expect(init.body.result.serverInfo.version).toBe("1.2.0");
     const tools = (await mcp(owner, "tools/list")).body.result.tools;
     const names = tools.map((t) => t.name);
-    expect(names).toHaveLength(42);
-    for (const n of ["manage_card", "manage_connections", "respond_nudge", "get_check_in", "get_video_brief", "grow_list", "add_translations"]) expect(names).toContain(n);
+    expect(names).toHaveLength(40);
+    for (const n of ["manage_card", "manage_connections", "respond_nudge", "get_check_in", "get_video_brief"]) expect(names).toContain(n);
     for (const n of ["list_connections", "create_api_key", "revoke_api_key", "get_nudges"]) expect(names).not.toContain(n);
     expect(tools.find((t) => t.name === "manage_card").annotations.destructiveHint).toBe(true);
     expect(tools.find((t) => t.name === "manage_connections").annotations.destructiveHint).toBe(true);
@@ -238,8 +238,7 @@ describe("share cards", () => {
     expect(page).toContain(`<meta property="og:image" content="${BASE}/c/${card.id}/og.png?lang=es">`);
     expect(page).toMatch(/<meta property="og:title" content="[^"]+">/);
     expect(page).toContain('class="share-banner"');
-    expect(page).toContain('<html lang="es"');
-    expect(page).toContain("EMPIEZA TUS 10");
+    expect(page).toContain("START YOUR 10");
     expect(page).not.toContain("GET IMAGES TO POST");
     await get(`/loop/${code}?c=${card.id}`, { ua: "Slackbot-LinkExpanding 1.0" });
     const cookie = await ownerCookie();

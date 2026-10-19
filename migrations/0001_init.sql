@@ -63,4 +63,4 @@ INSERT OR IGNORE INTO meta (key, value) VALUES ('schemaVersion', '1');
 
 INSERT OR IGNORE INTO meta (key, value) VALUES ('mode', '"building"');
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('protocolVersion', '"1.7"');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('protocolVersion', '"1.6"');

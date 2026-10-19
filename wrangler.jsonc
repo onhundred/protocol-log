@@ -1,26 +1,64 @@
+// Merged by scripts/update-from-template.mjs: name, vars, routes, account_id and resource ids
+// come from this install, everything else from the template.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "onhundred-protocol",
   "main": "src/worker.mjs",
   "compatibility_date": "2026-10-01",
-  // Needed to fetch Client ID Metadata Documents (how Claude and ChatGPT identify themselves).
-  "compatibility_flags": ["global_fetch_strictly_public"],
-  "assets": { "directory": "./public", "binding": "ASSETS" },
-  // Resources without an id are created on your account when you deploy.
-  "d1_databases": [{ "binding": "DB", "database_name": "onhundred-log", "migrations_dir": "migrations" }],
-  "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "onhundred-log-backups" }],
-  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
-  "durable_objects": { "bindings": [{ "name": "WRITER", "class_name": "Writer" }] },
-  // Browser Rendering takes the share card screenshots. Without it, shared links use /og.png.
-  "browser": { "binding": "BROWSER" },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Writer"] }],
-  // Nightly backup to R2 at 03:17 UTC, and a retry of any card screenshot that failed.
-  "triggers": { "crons": ["17 3 * * *"] },
+  "compatibility_flags": [
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "onhundred-log",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "onhundred-log-backups"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WRITER",
+        "class_name": "Writer"
+      }
+    ]
+  },
+  "browser": {
+    "binding": "BROWSER"
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Writer"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "17 3 * * *"
+    ]
+  },
   "vars": {
     "PUBLISH": "false",
     "LANGUAGES": "en"
   },
-  // Optional, added later in Settings, Variables and Secrets: OWNER_NAME, PUBLIC_URL, CARD_IMAGES
-  // ("off" stops card screenshots) (variables) and PUBLISH_HOOK_URL (secret).
-  "observability": { "enabled": true }
+  "observability": {
+    "enabled": true
+  }
 }

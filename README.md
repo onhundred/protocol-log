@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://github.com/onhundred/protocol-log/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/onhundred/protocol-log/test.yml?branch=main&style=flat-square&label=tests&labelColor=0A0A09" alt="Tests"></a>
   <a href="https://github.com/onhundred/protocol-log/releases"><img src="https://img.shields.io/github/v/release/onhundred/protocol-log?style=flat-square&label=release&labelColor=0A0A09&color=C6F432" alt="Release"></a>
-  <a href="./docs/protocol.md"><img src="https://img.shields.io/badge/protocol-v1.7-C6F432?style=flat-square&labelColor=0A0A09" alt="Protocol v1.7"></a>
-  <a href="#what-your-agent-can-do"><img src="https://img.shields.io/badge/MCP-42%20tools-C6F432?style=flat-square&labelColor=0A0A09" alt="MCP: 42 tools"></a>
+  <a href="./docs/protocol.md"><img src="https://img.shields.io/badge/protocol-v1.6-C6F432?style=flat-square&labelColor=0A0A09" alt="Protocol v1.6"></a>
+  <a href="#what-your-agent-can-do"><img src="https://img.shields.io/badge/MCP-40%20tools-C6F432?style=flat-square&labelColor=0A0A09" alt="MCP: 40 tools"></a>
   <a href="https://workers.cloudflare.com"><img src="https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-C6F432?style=flat-square&labelColor=0A0A09&logo=cloudflare&logoColor=white" alt="Runs on Cloudflare Workers"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-C6F432?style=flat-square&labelColor=0A0A09" alt="License: Apache 2.0"></a>
 </p>
@@ -37,7 +37,7 @@
 
 <div align="center">
 
-| **100** | **3** | **2 weeks** | **41** | **2 minutes** |
+| **100** | **3** | **2 weeks** | **40** | **2 minutes** |
 | :---: | :---: | :---: | :---: | :---: |
 | loops in your life | loops at a time | between check-ins | MCP tools | to deploy |
 
@@ -83,7 +83,7 @@ Every loop starts as **Still yours** and climbs 3 levels: **Help me**, **Do it, 
   <tr>
     <td width="33%" valign="top">
       <h4>An agent that does the work</h4>
-      41 MCP tools, 5 documents and 4 starter prompts. Claude, ChatGPT, Grok, Cursor and Claude Code build your loops and run your experiments.
+      40 MCP tools, 5 documents and 4 starter prompts. Claude, ChatGPT, Grok, Cursor and Claude Code build your loops and run your experiments.
     </td>
     <td width="33%" valign="top">
       <h4>Rules agents can't break</h4>
@@ -182,7 +182,7 @@ Each app and key is a named agent. Its name appears in the history next to every
 
 ## What your agent can do
 
-Your log is an [MCP](https://modelcontextprotocol.io) server. MCP is the standard way AI apps read from and write to other systems. Your log gives your agent 42 tools, 5 documents and 4 starter prompts.
+Your log is an [MCP](https://modelcontextprotocol.io) server. MCP is the standard way AI apps read from and write to other systems. Your log gives your agent 40 tools, 5 documents and 4 starter prompts.
 
 Apps you sign in to get **owner** access. API keys get **agent** or **owner** access, chosen when you create them. Agent access reads and proposes. Only owner access approves, publishes and changes settings.
 
@@ -206,7 +206,7 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 </details>
 
 <details>
-<summary><b>Propose and record</b>: 16 tools, any connection, every change checked against the rules</summary>
+<summary><b>Propose and record</b>: 15 tools, any connection, every change checked against the rules</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -223,14 +223,13 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 | `record_hold` | Records whether a passed round kept passing for 3 weeks. |
 | `record_drop` | Moves a loop down after failing days, harm or lost consent. |
 | `add_learned` | Adds the public lesson of an ended round. It waits for approval. |
-| `add_translations` | Fills a language a text is missing. It goes live, since it changes nothing that's there. |
 | `get_check_in` | Sums up the last 2 weeks. From you, inside the check-in window, it marks the check-in done. |
 | `manage_card` | Lists share cards. Only you can remake a card, take it down or get images to post. |
 
 </details>
 
 <details>
-<summary><b>Owner</b>: 15 tools, owner access only. Your agent confirms with you before the ones that publish or approve.</summary>
+<summary><b>Owner</b>: 14 tools, owner access only. Your agent confirms with you before the ones that publish or approve.</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -239,11 +238,10 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 | `reject_text` | Discards pending text. The live version stays. |
 | `approve_baseline` | Approves a measured cost. The loop is marked measured. |
 | `set_published` | Publishes a partner loop once your partner agrees. |
-| `freeze_inventory` | Freezes your list at exactly its size: 10 or 100 loops. |
-| `grow_list` | Grows a frozen list of 10 to 100 at a check-in. The 10 loops keep their history. |
+| `freeze_inventory` | Freezes your list at exactly 100 loops. |
 | `register_experiment` | Writes down an experiment: pick, question, bet, loops and goal. |
 | `conclude_experiment` | Records the bet as right, wrong or not clear. |
-| `set_meta` | Changes settings: your name, why you run this, your links, languages, publishing, check-in dates and the grid. It also sets challenges, questions, share cards, pauses and your list size (10 or 100). |
+| `set_meta` | Changes settings: your name, why you run this, your links, languages, publishing, check-in dates and the grid. It also sets challenges, questions, share cards and pauses. |
 | `adopt_protocol` | Moves your log to the protocol version in this code. |
 | `undo_event` | Restores the values from before an event, as a new event. |
 | `override` | Runs 1 change past the checks, for emergencies, and records it. |
@@ -254,7 +252,7 @@ Apps you sign in to get **owner** access. API keys get **agent** or **owner** ac
 
 **Documents** your agent reads: the protocol, `LOOPS.md` (how to write a loop), `VOICE.md` (how to write public text) and `protocol.json` (the numbers the rules use). `PLAYBOOK.md` says when to challenge you, ask you and congratulate you.
 
-**Starter prompts:** "Help me build my loops", "Which loops should I pick?", "Run my check-in" and "Help me film this moment". Apps that support MCP prompts show them as shortcuts.
+**Starter prompts:** "Help me build my 100 loops", "Which loops should I pick?", "Run my check-in" and "Help me film this moment". Apps that support MCP prompts show them as shortcuts.
 
 **Share cards.** A big moment, like a round that passed or a bet that went wrong, gets a card. Your agent gives you its link to share. Its preview is a picture of the card. The link opens your loop, your experiment or your log. If your log is private, it opens the card alone. Ask your agent for square and tall images to post. Turn cards off with `set_meta`.
 

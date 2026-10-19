@@ -1,4 +1,4 @@
-# Onhundred Protocol v1.7
+# Onhundred Protocol v1.6
 
 A method for delegating your life and work to AI agents.
 
@@ -631,12 +631,6 @@ These items aren't decided by one person alone. Until each one is settled, the r
 | Your list | All your loops, with a new version every 2 weeks |
 
 ## What changed
-
-**v1.7 · Oct 14, 2026.** Spanish names:
-
-- Spanish loop names follow the naming rules too. A Spanish name that starts with decidir, elegir, recordar, recordarme, dar seguimiento, monitorear, estar al tanto de, pensar en, preparar, revisar, gestionar or manejar breaks the rules.
-- Spanish public text has its own retired words: parte, partes, tarea, tareas, prueba and pruebas.
-- A log keeps the rules of its version. These apply once the log adopts v1.7.
 
 **v1.6 · Oct 14, 2026.** Delegate in public:
 

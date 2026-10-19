@@ -1,5 +1,5 @@
 {
-  "version": "1.7",
+  "version": "1.6",
   "attribution": {
     "text": "Onhundred Protocol by Ale Sánchez",
     "url": "https://onhundred.com",
@@ -68,7 +68,6 @@
     "notYet": { "minRisk": 4 },
     "hardMaxRulesOrDigital": 2
   },
-  "listSizes": [10, 100],
   "limits": {
     "loops": 100,
     "experimentSlots": ["easy", "hard", "fun"],
@@ -93,39 +92,22 @@
   "conclusions": ["confirmed", "refuted", "unclear"],
   "naming": {
     "maxWords": 8,
-    "failingVerbs": {
-      "en": [
-        "remember",
-        "remind",
-        "track",
-        "monitor",
-        "keep an eye on",
-        "stay on top of",
-        "think about",
-        "prepare",
-        "review",
-        "manage",
-        "handle",
-        "decide",
-        "choose"
-      ],
-      "es": [
-        "recordar",
-        "recordarme",
-        "dar seguimiento",
-        "monitorear",
-        "estar al tanto de",
-        "pensar en",
-        "preparar",
-        "revisar",
-        "gestionar",
-        "manejar",
-        "decidir",
-        "elegir"
-      ]
-    },
-    "since": { "decide": "1.1", "choose": "1.1" },
-    "languageSince": { "es": "1.7" }
+    "failingVerbs": [
+      "remember",
+      "remind",
+      "track",
+      "monitor",
+      "keep an eye on",
+      "stay on top of",
+      "think about",
+      "prepare",
+      "review",
+      "manage",
+      "handle",
+      "decide",
+      "choose"
+    ],
+    "since": { "decide": "1.1", "choose": "1.1" }
   },
   "metrics": {
     "assistedWeight": { "1.0": 0, "1.1": 0.5 }
@@ -136,8 +118,7 @@
     "1.3": { "en": "your list holds 10 or 100 loops", "es": "tu lista tiene 10 o 100 loops" },
     "1.4": { "en": "an estimated cost is enough to start an experiment", "es": "un costo estimado basta para empezar un experimento" },
     "1.5": { "en": "plain words, same rules", "es": "palabras simples, mismas reglas" },
-    "1.6": { "en": "private by default, with cards when you share", "es": "privado por defecto, con tarjetas cuando compartes" },
-    "1.7": { "en": "Spanish loop names follow the naming rules too", "es": "los nombres de loops en español también siguen las reglas de nombres" }
+    "1.6": { "en": "private by default, with cards when you share", "es": "privado por defecto, con tarjetas cuando compartes" }
   },
   "voice": {
     "neverUse": [
@@ -158,11 +139,8 @@
       "in today's world",
       "the future of work"
     ],
-    "retired": {
-      "en": ["part", "parts", "task", "tasks", "test", "tests"],
-      "es": ["parte", "partes", "tarea", "tareas", "prueba", "pruebas"]
-    },
-    "retiredAllowedAfter": { "en": ["success"], "es": [] },
+    "retired": ["part", "parts", "task", "tasks", "test", "tests"],
+    "retiredAllowedAfter": ["success"],
     "guilt": [
       "you haven't",
       "you still haven't",
